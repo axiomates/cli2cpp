@@ -31,7 +31,8 @@ output_*/
 
 # === IDE ===
 .vs/
-.vscode/
+.vscode/*
+!.vscode/c_cpp_properties.json
 *.user
 *.suo
 
