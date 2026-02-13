@@ -182,7 +182,8 @@ class Program
 
         try
         {
-            Console.WriteLine($"CIL2CPP Code Generator v0.1.0");
+            var version = typeof(Program).Assembly.GetName().Version;
+            Console.WriteLine($"CIL2CPP Code Generator v{version?.ToString(3) ?? "0.0.0"}");
             Console.WriteLine($"Input:  {assemblyFile.FullName}");
             Console.WriteLine($"Output: {output.FullName}");
             Console.WriteLine($"Config: {config.ConfigurationName}");
@@ -260,7 +261,8 @@ class Program
 
         try
         {
-            Console.WriteLine($"CIL2CPP Compiler v0.1.0");
+            var version = typeof(Program).Assembly.GetName().Version;
+            Console.WriteLine($"CIL2CPP Compiler v{version?.ToString(3) ?? "0.0.0"}");
             Console.WriteLine($"Input:  {assemblyFile.FullName}");
             Console.WriteLine($"Output: {output.FullName}");
             Console.WriteLine($"Config: {config.ConfigurationName}");

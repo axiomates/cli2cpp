@@ -10,6 +10,18 @@ namespace CIL2CPP.Core.IR;
 /// </summary>
 public class IRBuilder
 {
+    /// <summary>
+    /// Well-known vtable slot indices for System.Object virtual methods.
+    /// These must match the order used in BuildVTable root seeding and EmitMethodCall.
+    /// </summary>
+    private static class ObjectVTableSlots
+    {
+        public const int ToStringSlot = 0;
+        public const int EqualsSlot = 1;
+        public const int GetHashCodeSlot = 2;
+        public const int Count = 3;
+    }
+
     private readonly AssemblyReader _reader;
     private readonly IRModule _module;
     private readonly BuildConfiguration _config;
@@ -209,6 +221,7 @@ public class IRBuilder
         irType.InstanceSize = size;
     }
 
+    // Field sizes per ECMA-335 §I.8.2.1 (Built-in Value Types)
     private int GetFieldSize(string typeName)
     {
         return typeName switch
@@ -427,8 +440,8 @@ public class IRBuilder
             }
             catch
             {
-                // For unsupported instructions, add a comment
-                block.Instructions.Add(new IRComment { Text = $"TODO: {instr}" });
+                block.Instructions.Add(new IRComment { Text = $"WARNING: Unsupported IL instruction: {instr}" });
+                Console.Error.WriteLine($"WARNING: Unsupported IL instruction '{instr.OpCode}' at IL_{instr.Offset:X4} in {irMethod.CppName}");
             }
 
             // Attach debug info to newly added instructions
@@ -1110,7 +1123,8 @@ public class IRBuilder
             }
 
             default:
-                block.Instructions.Add(new IRComment { Text = $"TODO: {instr}" });
+                block.Instructions.Add(new IRComment { Text = $"WARNING: Unsupported IL instruction: {instr}" });
+                Console.Error.WriteLine($"WARNING: Unsupported IL instruction '{instr.OpCode}' at IL_{instr.Offset:X4} in {method.CppName}");
                 break;
         }
     }
@@ -1219,7 +1233,7 @@ public class IRBuilder
                 foreach (var m in resolved.Methods)
                 {
                     if (m.IsConstructor || m.IsStaticConstructor) continue;
-                    if (m.Name == methodRef.Name) { found = true; break; }
+                    if (m.Name == methodRef.Name && m.Parameters.Count == methodRef.Parameters.Count) { found = true; break; }
                     ifaceSlot++;
                 }
                 if (found)
@@ -1235,7 +1249,8 @@ public class IRBuilder
             else if (resolved != null && !resolved.IsValueType)
             {
                 // Class virtual dispatch
-                var entry = resolved.VTable.FirstOrDefault(e => e.MethodName == methodRef.Name);
+                var entry = resolved.VTable.FirstOrDefault(e => e.MethodName == methodRef.Name
+                    && (e.Method == null || e.Method.Parameters.Count == methodRef.Parameters.Count));
                 if (entry != null)
                 {
                     irCall.IsVirtual = true;
@@ -1249,9 +1264,9 @@ public class IRBuilder
                 // System.Object is not in _typeCache but has well-known vtable slots
                 var slot = methodRef.Name switch
                 {
-                    "ToString" => 0,
-                    "Equals" => 1,
-                    "GetHashCode" => 2,
+                    "ToString" => ObjectVTableSlots.ToStringSlot,
+                    "Equals" => ObjectVTableSlots.EqualsSlot,
+                    "GetHashCode" => ObjectVTableSlots.GetHashCodeSlot,
                     _ => -1
                 };
                 if (slot >= 0)
@@ -1355,9 +1370,19 @@ public class IRBuilder
         // Math methods
         if (fullType == "System.Math")
         {
+            // Abs has multiple overloads — use explicit C++ functions to avoid ambiguity
+            if (name == "Abs" && methodRef.Parameters.Count == 1)
+            {
+                return methodRef.Parameters[0].ParameterType.FullName switch
+                {
+                    "System.Single" => "std::fabsf",
+                    "System.Double" => "std::fabs",
+                    _ => "std::abs" // int, long, short, sbyte — works via <cstdlib>
+                };
+            }
+
             return name switch
             {
-                "Abs" => "std::abs",
                 "Max" => "std::max",
                 "Min" => "std::min",
                 "Sqrt" => "std::sqrt",
@@ -1402,15 +1427,16 @@ public class IRBuilder
         {
             // Root type (base = System.Object, not in _typeCache)
             // Seed with System.Object virtual method slots so overrides can replace them
-            irType.VTable.Add(new IRVTableEntry { Slot = 0, MethodName = "ToString", Method = null, DeclaringType = null });
-            irType.VTable.Add(new IRVTableEntry { Slot = 1, MethodName = "Equals", Method = null, DeclaringType = null });
-            irType.VTable.Add(new IRVTableEntry { Slot = 2, MethodName = "GetHashCode", Method = null, DeclaringType = null });
+            irType.VTable.Add(new IRVTableEntry { Slot = ObjectVTableSlots.ToStringSlot, MethodName = "ToString", Method = null, DeclaringType = null });
+            irType.VTable.Add(new IRVTableEntry { Slot = ObjectVTableSlots.EqualsSlot, MethodName = "Equals", Method = null, DeclaringType = null });
+            irType.VTable.Add(new IRVTableEntry { Slot = ObjectVTableSlots.GetHashCodeSlot, MethodName = "GetHashCode", Method = null, DeclaringType = null });
         }
 
         // Override or add virtual methods
         foreach (var method in irType.Methods.Where(m => m.IsVirtual))
         {
-            var existing = irType.VTable.FirstOrDefault(e => e.MethodName == method.Name);
+            var existing = irType.VTable.FirstOrDefault(e => e.MethodName == method.Name
+                && (e.Method == null || e.Method.Parameters.Count == method.Parameters.Count));
             if (existing != null)
             {
                 // Override
@@ -1443,19 +1469,20 @@ public class IRBuilder
             {
                 // Skip constructors — only map actual interface methods
                 if (ifaceMethod.IsConstructor || ifaceMethod.IsStaticConstructor) continue;
-                var implMethod = FindImplementingMethod(irType, ifaceMethod.Name);
+                var implMethod = FindImplementingMethod(irType, ifaceMethod.Name, ifaceMethod.Parameters.Count);
                 impl.MethodImpls.Add(implMethod); // null if not found — keeps slot alignment
             }
             irType.InterfaceImpls.Add(impl);
         }
     }
 
-    private static IRMethod? FindImplementingMethod(IRType type, string methodName)
+    private static IRMethod? FindImplementingMethod(IRType type, string methodName, int paramCount)
     {
         var current = type;
         while (current != null)
         {
-            var method = current.Methods.FirstOrDefault(m => m.Name == methodName && !m.IsAbstract && !m.IsStatic);
+            var method = current.Methods.FirstOrDefault(m => m.Name == methodName && !m.IsAbstract && !m.IsStatic
+                && m.Parameters.Count == paramCount);
             if (method != null) return method;
             current = current.BaseType;
         }

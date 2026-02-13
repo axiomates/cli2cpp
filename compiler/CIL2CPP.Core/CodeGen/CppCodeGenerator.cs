@@ -8,6 +8,17 @@ namespace CIL2CPP.Core.CodeGen;
 /// </summary>
 public class CppCodeGenerator
 {
+    /// <summary>
+    /// BCL fallback vtable entries for System.Object virtual methods.
+    /// Used when a VTable slot has no user override (Method == null).
+    /// </summary>
+    private static readonly Dictionary<string, string> ObjectMethodFallbacks = new()
+    {
+        ["ToString"] = "(void*)cil2cpp::object_to_string",
+        ["Equals"] = "(void*)cil2cpp::object_equals",
+        ["GetHashCode"] = "(void*)cil2cpp::object_get_hash_code",
+    };
+
     private readonly IRModule _module;
     private readonly BuildConfiguration _config;
 
@@ -694,13 +705,7 @@ public class CppCodeGenerator
             var methods = string.Join(", ", type.VTable.Select(e =>
             {
                 if (e.Method != null && !e.Method.IsAbstract) return $"(void*){e.Method.CppName}";
-                return e.MethodName switch
-                {
-                    "ToString" => "(void*)cil2cpp::object_to_string",
-                    "Equals" => "(void*)cil2cpp::object_equals",
-                    "GetHashCode" => "(void*)cil2cpp::object_get_hash_code",
-                    _ => "nullptr"
-                };
+                return ObjectMethodFallbacks.GetValueOrDefault(e.MethodName, "nullptr");
             }));
             sb.AppendLine($"static void* {type.CppName}_vtable_methods[] = {{ {methods} }};");
             sb.AppendLine($"static cil2cpp::VTable {type.CppName}_VTable = {{ &{type.CppName}_TypeInfo, {type.CppName}_vtable_methods, {type.VTable.Count} }};");

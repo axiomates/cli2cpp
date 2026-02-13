@@ -26,7 +26,7 @@ static void init_console() {
 
 #ifdef _WIN32
     // Set console code page to UTF-8
-    SetConsoleOutputCP(65001);
+    SetConsoleOutputCP(CP_UTF8);
 #endif
 
     g_console_initialized = true;

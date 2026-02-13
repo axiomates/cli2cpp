@@ -8,6 +8,7 @@
     <OutputType>Exe</OutputType>
     <RootNamespace>CIL2CPP.CLI</RootNamespace>
     <AssemblyName>cil2cpp</AssemblyName>
+    <Version>0.1.0</Version>
   </PropertyGroup>
 
   <ItemGroup>

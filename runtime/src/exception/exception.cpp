@@ -105,10 +105,14 @@ String* capture_stack_trace() {
         sym_initialized = true;
     }
 
+    // 64 frames is sufficient for most managed call stacks; deeper recursion
+    // will simply have the oldest frames truncated from the trace.
     constexpr int MAX_FRAMES = 64;
+    // Skip the 2 internal frames: capture_stack_trace() and create_exception()
+    constexpr int FRAMES_TO_SKIP = 2;
     void* frames[MAX_FRAMES];
     USHORT frame_count = CaptureStackBackTrace(
-        2,  // Skip capture_stack_trace and create_exception
+        FRAMES_TO_SKIP,
         MAX_FRAMES,
         frames,
         NULL
@@ -154,12 +158,15 @@ String* capture_stack_trace() {
 
 #elif defined(CIL2CPP_POSIX)
     // Linux/macOS: backtrace + backtrace_symbols
+    // 64 frames is sufficient for most managed call stacks; deeper recursion
+    // will simply have the oldest frames truncated from the trace.
     constexpr int MAX_FRAMES = 64;
+    // Skip the 2 internal frames: capture_stack_trace() and create_exception()
+    constexpr int FRAMES_TO_SKIP = 2;
     void* frames[MAX_FRAMES];
     int frame_count = backtrace(frames, MAX_FRAMES);
 
-    // Skip the first 2 frames (capture_stack_trace and create_exception)
-    int skip = 2;
+    int skip = FRAMES_TO_SKIP;
     if (frame_count <= skip) {
         return string_literal("[No stack frames captured]");
     }

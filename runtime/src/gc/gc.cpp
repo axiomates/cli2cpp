@@ -57,7 +57,9 @@ void* alloc(size_t size, TypeInfo* type) {
 void* alloc_array(TypeInfo* element_type, size_t length) {
     size_t element_size = element_type->element_size;
     if (element_size == 0) {
-        element_size = sizeof(void*);  // Reference type
+        // Reference types have element_size 0 in TypeInfo; arrays of references
+        // store pointer-sized entries (each element is an Object*).
+        element_size = sizeof(void*);
     }
     size_t total_size = sizeof(Array) + (element_size * length);
 

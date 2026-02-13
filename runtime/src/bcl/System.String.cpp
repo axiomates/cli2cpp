@@ -41,6 +41,8 @@ TypeInfo String_TypeInfo = {
 
 } // namespace System
 
+// ---------- UTF-8 ↔ UTF-16 conversion (RFC 3629 / Unicode 15.0) ----------
+
 // Convert UTF-8 to UTF-16 length
 static Int32 utf8_to_utf16_length(const char* utf8) {
     Int32 len = 0;
@@ -168,14 +170,17 @@ Boolean string_equals(String* a, String* b) {
     return std::memcmp(a->chars, b->chars, a->length * sizeof(Char)) == 0;
 }
 
+// FNV-1a hash constants (http://www.isthe.com/chongo/tech/comp/fnv/)
+static constexpr UInt32 FNV1A_OFFSET_BASIS = 2166136261u;
+static constexpr UInt32 FNV1A_PRIME        = 16777619u;
+
 Int32 string_get_hash_code(String* str) {
     if (!str) return 0;
 
-    // FNV-1a hash
-    UInt32 hash = 2166136261u;
+    UInt32 hash = FNV1A_OFFSET_BASIS;
     for (Int32 i = 0; i < str->length; i++) {
         hash ^= static_cast<UInt32>(str->chars[i]);
-        hash *= 16777619u;
+        hash *= FNV1A_PRIME;
     }
     return static_cast<Int32>(hash);
 }

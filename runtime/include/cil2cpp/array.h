@@ -40,6 +40,7 @@ inline Int32 array_length(Array* arr) {
 
 /**
  * Get pointer to array element data.
+ * Element data is stored immediately after the Array header (trailing data pattern).
  */
 inline void* array_data(Array* arr) {
     return reinterpret_cast<char*>(arr) + sizeof(Array);
