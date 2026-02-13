@@ -139,7 +139,6 @@ public class CppCodeGenerator
         {
             sb.AppendLine($"struct {type.CppName} {{");
             sb.AppendLine($"    cil2cpp::TypeInfo* __type_info;");
-            sb.AppendLine($"    cil2cpp::UInt32 __gc_mark;");
             sb.AppendLine($"    cil2cpp::UInt32 __sync_block;");
 
             // Base type fields (if not Object)

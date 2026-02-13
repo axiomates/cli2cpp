@@ -1,5 +1,5 @@
 /**
- * CIL2CPP Runtime - Garbage Collector
+ * CIL2CPP Runtime - Garbage Collector (BoehmGC wrapper)
  */
 
 #pragma once
@@ -11,12 +11,10 @@ namespace gc {
 
 /**
  * GC configuration options.
+ * BoehmGC manages heap sizing automatically; this struct is kept
+ * for API compatibility.
  */
-struct GCConfig {
-    size_t initial_heap_size = 16 * 1024 * 1024;  // 16 MB
-    size_t max_heap_size = 512 * 1024 * 1024;     // 512 MB
-    float gc_threshold = 0.75f;                    // Trigger GC at 75% usage
-};
+struct GCConfig {};
 
 /**
  * Initialize the garbage collector.
@@ -50,21 +48,19 @@ void* alloc_array(TypeInfo* element_type, size_t length);
 void collect();
 
 /**
- * Add a root reference (global/static variables).
+ * Add a root reference (no-op -BoehmGC scans roots automatically).
  */
 void add_root(void** root);
 
 /**
- * Remove a root reference.
+ * Remove a root reference (no-op -BoehmGC scans roots automatically).
  */
 void remove_root(void** root);
 
 /**
- * Write barrier - called when writing a reference field.
- * Required for generational GC.
+ * Write barrier (no-op -BoehmGC does not require write barriers).
  */
 inline void write_barrier(Object* obj, Object* value) {
-    // TODO: Implement for generational GC
     (void)obj;
     (void)value;
 }

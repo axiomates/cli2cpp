@@ -20,9 +20,6 @@ struct Object {
     // Pointer to runtime type information
     TypeInfo* __type_info;
 
-    // GC mark flag (used during garbage collection)
-    UInt32 __gc_mark;
-
     // Sync block index (for threading/locking)
     UInt32 __sync_block;
 };

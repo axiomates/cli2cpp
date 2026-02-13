@@ -4,6 +4,50 @@ project(cil2cpp VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# === BoehmGC (FetchContent) ===
+# Cache downloads in .deps/ (gitignored) so deleting build/ won't re-download
+set(FETCHCONTENT_BASE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/.deps"
+    CACHE PATH "FetchContent cache directory")
+include(FetchContent)
+
+FetchContent_Declare(
+    bdwgc
+    GIT_REPOSITORY https://github.com/ivmai/bdwgc.git
+    GIT_TAG v8.2.12
+)
+FetchContent_Declare(
+    libatomic_ops
+    GIT_REPOSITORY https://github.com/ivmai/libatomic_ops.git
+    GIT_TAG v7.10.0
+)
+
+# Populate sources (download only, don't add_subdirectory yet)
+FetchContent_GetProperties(bdwgc)
+if(NOT bdwgc_POPULATED)
+    FetchContent_Populate(bdwgc)
+endif()
+FetchContent_GetProperties(libatomic_ops)
+if(NOT libatomic_ops_POPULATED)
+    FetchContent_Populate(libatomic_ops)
+endif()
+
+# MSVC needs libatomic_ops inside bdwgc source tree
+if(MSVC AND NOT EXISTS "${bdwgc_SOURCE_DIR}/libatomic_ops")
+    file(CREATE_LINK "${libatomic_ops_SOURCE_DIR}" "${bdwgc_SOURCE_DIR}/libatomic_ops"
+         COPY_ON_ERROR SYMBOLIC)
+endif()
+
+# Configure bdwgc options and add to build
+set(enable_cplusplus ON CACHE BOOL "" FORCE)
+set(BUILD_SHARED_LIBS OFF CACHE BOOL "" FORCE)
+set(build_tests OFF CACHE BOOL "" FORCE)
+set(enable_docs OFF CACHE BOOL "" FORCE)
+set(install_headers OFF CACHE BOOL "" FORCE)
+add_subdirectory(${bdwgc_SOURCE_DIR} ${bdwgc_BINARY_DIR} EXCLUDE_FROM_ALL)
+
+# Match our DEBUG_POSTFIX so Debug installs gcd.lib, Release installs gc.lib
+set_target_properties(gc PROPERTIES DEBUG_POSTFIX d)
+
 # Runtime library sources
 set(RUNTIME_SOURCES
     src/runtime.cpp
@@ -32,7 +76,13 @@ target_include_directories(cil2cpp_runtime
         $<INSTALL_INTERFACE:include>
     PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR}/src
+        ${bdwgc_SOURCE_DIR}/include  # BoehmGC headers (gc/gc.h)
 )
+
+# BoehmGC — PRIVATE dep, installed separately for consumers
+target_link_libraries(cil2cpp_runtime PRIVATE gc)
+# GC_NOT_DLL: tell bdwgc headers we link statically (prevents __declspec(dllimport))
+target_compile_definitions(cil2cpp_runtime PRIVATE GC_NOT_DLL)
 
 # Platform-specific settings
 if(WIN32)
@@ -80,6 +130,9 @@ install(TARGETS cil2cpp_runtime
 install(DIRECTORY include/
     DESTINATION include
 )
+
+# Install BoehmGC library (needed by consumers at link time)
+install(FILES $<TARGET_FILE:gc> DESTINATION lib)
 
 # CMake package config
 install(EXPORT cil2cppTargets

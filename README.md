@@ -94,7 +94,7 @@ cmake --install build --config Debug --prefix <安装路径>
 │   ├── object.h                #   Object 基类 + 分配/转型
 │   ├── string.h                #   String 类型（UTF-16，不可变，驻留池）
 │   ├── array.h                 #   Array 类型（类型化，越界检查）
-│   ├── gc.h                    #   GC 接口（alloc / collect / roots）
+│   ├── gc.h                    #   GC 接口（BoehmGC 封装：alloc / collect）
 │   ├── exception.h             #   异常处理（setjmp/longjmp）
 │   ├── type_info.h             #   TypeInfo / VTable / MethodInfo / FieldInfo
 │   └── bcl/                    #   BCL 实现头文件
@@ -104,6 +104,8 @@ cmake --install build --config Debug --prefix <安装路径>
 └── lib/
     ├── cil2cpp_runtime.lib     # Release 静态库（Windows .lib / Linux .a）
     ├── cil2cpp_runtimed.lib    # Debug 静态库（DEBUG_POSTFIX "d"）
+    ├── gc.lib                  # BoehmGC Release 静态库（自动安装）
+    ├── gcd.lib                 # BoehmGC Debug 静态库
     └── cmake/cil2cpp/          # CMake 包配置（自动选择 Release/Debug 库）
         ├── cil2cppConfig.cmake
         ├── cil2cppConfigVersion.cmake
@@ -112,10 +114,12 @@ cmake --install build --config Debug --prefix <安装路径>
         └── cil2cppTargets-debug.cmake
 ```
 
-**平台说明：**
+**依赖说明：**
+- **BoehmGC (bdwgc v8.2.12)** — 保守式垃圾收集器，构建运行时时通过 FetchContent 自动下载（缓存在 `runtime/.deps/`，删除 `build/` 不会重新下载）。MSVC 需要 libatomic_ops（同样自动下载）
+- **gc.lib / gcd.lib** — BoehmGC 静态库，随运行时一起安装。消费者通过 `find_package(cil2cpp)` 自动链接，无需手动配置
 - Windows Debug 模式自动链接 `dbghelp`（用于栈回溯符号解析）
 - Linux/macOS 自动链接 pthreads
-- 这些依赖通过 CMake target 传递，消费者无需手动添加
+- 所有依赖通过 CMake target 传递，消费者无需手动添加
 
 ---
 
@@ -299,7 +303,6 @@ public class Program
 ```cpp
 struct Calculator {
     cil2cpp::TypeInfo* __type_info;
-    cil2cpp::UInt32 __gc_mark;
     cil2cpp::UInt32 __sync_block;
     int32_t f_result;
 };
@@ -359,7 +362,7 @@ void Program_Main() {
 | 运算符重载 | ❌ | |
 | 索引器 | ❌ | |
 | 静态构造函数 (.cctor) | ❌ | |
-| 终结器 / 析构函数 | ❌ | GC TypeInfo 中有 finalizer 字段，但未接入 |
+| 终结器 / 析构函数 | ❌ | 运行时支持 BoehmGC finalizer 注册，但编译器未检测 `~Destructor()` / `Finalize()` 方法 |
 
 ### 控制流
 
@@ -451,14 +454,13 @@ void Program_Main() {
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| Mark-sweep GC | ⚠️ | malloc/free，基本标记-清扫。已知问题：栈根未扫描、引用字段未追踪、阈值未执行（详见 `.claude/gc-refactoring-plan.md`） |
+| BoehmGC | ✅ | 保守扫描 GC（bdwgc），自动管理栈根、全局变量、堆引用 |
 | TypeInfo / VTable | ✅ | 完整类型元数据 |
-| 对象模型 | ✅ | Object 基类 + __type_info + __gc_mark + __sync_block |
+| 对象模型 | ✅ | Object 基类 + __type_info + __sync_block |
 | 字符串 (UTF-16) | ✅ | 不可变，驻留池，FNV-1a 哈希 |
 | 数组（类型化 + 越界检查） | ⚠️ | 运行时 array_get/set 模板就绪，编译器未生成元素访问 |
 | 异常处理 (setjmp/longjmp) | ⚠️ | CIL2CPP_TRY/CATCH/FINALLY 宏已定义，编译器未生成 |
-| 分代 GC | ❌ | 写屏障 stub 存在（gc.h TODO） |
-| 多线程 GC | ❌ | 当前单线程 stop-the-world |
+| 增量/并发 GC | ❌ | BoehmGC 支持增量模式，未启用 |
 
 ---
 
@@ -534,7 +536,7 @@ Phase 1 (基础)        Phase 2 (对象模型)       Phase 3 (泛型/委托)
 | **装箱 / 拆箱** | 值类型作为 object 引用使用时的包装/解包。许多 BCL 模式和隐式转换依赖此功能 |
 | **枚举完整支持** | 底层整数类型、ToString、Parse、Flags 特性 |
 | **运算符重载** | 映射到 op_Addition / op_Equality 等方法 |
-| **终结器** | 将 TypeInfo 中的 finalizer 函数指针接入 GC sweep 阶段 |
+| **终结器** | 编译器检测 `Finalize()` 方法并填充 TypeInfo.finalizer 字段（运行时的 BoehmGC finalizer 注册已就绪） |
 
 ### Phase 3：泛型与委托
 
@@ -584,9 +586,68 @@ Phase 1 (基础)        Phase 2 (对象模型)       Phase 3 (泛型/委托)
 | **多线程** | Thread、Task、Monitor、lock 语句；需要多线程安全的 GC |
 | **反射** | 填充 MethodInfo / FieldInfo 数组，Type.GetMethods、Invoke |
 | **特性 (Attribute)** | 元数据存储和运行时查询 |
-| **分代 GC** | 写屏障、新生代/老年代，减少 GC 暂停时间 |
+| **增量/并发 GC** | BoehmGC 支持增量模式，当前未启用 |
 | **P/Invoke / DllImport** | 原生互操作 |
 | **unsafe 代码** | 指针运算、fixed、stackalloc |
+
+---
+
+## 垃圾收集器 (GC)
+
+运行时使用 [BoehmGC (bdwgc)](https://github.com/ivmai/bdwgc) 作为垃圾收集器——与 Mono 相同的保守式 GC。
+
+### 架构
+
+```
+C# 用户代码          编译器 codegen              运行时
+───────────          ──────────────              ──────
+new MyClass()   →    gc::alloc(sizeof, &TypeInfo)  →  GC_MALLOC() + 设置对象头
+                     (IRNewObj)                        注册 finalizer（如有）
+
+new int[10]     →    array_create(&TypeInfo, 10)   →  GC_MALLOC(header + data)
+                     (IRRawCpp)                        设置 element_type + length
+
+                     runtime_init()               →  GC_INIT()
+                     runtime_shutdown()            →  GC_gcollect() + 退出
+```
+
+### 为什么选择 BoehmGC
+
+BoehmGC 的**保守扫描**自动解决所有根追踪问题：
+
+| 场景 | 自定义 GC（已废弃） | BoehmGC |
+|------|---------------------|---------|
+| 栈上局部变量 | 需要 shadow stack | 自动扫描栈 |
+| 引用类型字段 | 需要引用位图 | 自动扫描堆 |
+| 数组中的引用元素 | 需要手动标记 | 自动扫描 |
+| 静态字段（全局变量） | 需要 add_root | 自动扫描全局区 |
+| 值类型中的引用字段 | 需要精确布局 | 自动扫描 |
+
+### 依赖管理
+
+```
+runtime/CMakeLists.txt
+├── FetchContent: bdwgc v8.2.12        ← 自动下载
+├── FetchContent: libatomic_ops v7.10.0 ← MSVC 需要
+└── 缓存: runtime/.deps/               ← gitignored，删 build/ 不重新下载
+```
+
+- bdwgc 编译为静态库，PRIVATE 链接到 cil2cpp_runtime
+- 安装时 gc.lib / gcd.lib 单独拷贝到 `lib/`
+- 消费者通过 `find_package(cil2cpp)` 自动链接（cil2cppConfig.cmake 创建 `BDWgc::gc` imported target）
+
+### 当前状态
+
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| 对象分配 + TypeInfo | ✅ | `gc::alloc()` → `GC_MALLOC()` + 设置 `__type_info` |
+| 数组分配 | ⚠️ | 可工作，但数组自身的 `__type_info` 为 nullptr |
+| 自动根扫描 | ✅ | BoehmGC 保守扫描，无需 shadow stack / add_root |
+| Finalizer 注册 | ✅ | `GC_register_finalizer_no_order()`，运行时已就绪 |
+| Finalizer 检测 | ❌ | 编译器未检测 `~Destructor()` / `Finalize()` 方法，TypeInfo.finalizer 始终为 nullptr |
+| GC 统计 | ✅ | `GC_get_heap_size()` / `GC_get_total_bytes()` / `GC_get_gc_no()` |
+| Write barrier | ✅ | 空操作（BoehmGC 不需要） |
+| 增量/并发回收 | ❌ | BoehmGC 支持但未启用 |
 
 ---
 
@@ -631,13 +692,13 @@ ctest --test-dir runtime/tests/build -C Debug --output-on-failure
 
 | 模块 | 测试数 |
 |------|--------|
-| GC | 17 |
+| GC | 14 |
 | String | 34 |
 | Array | 14 |
 | Type System | 18 |
 | Object | 18 |
 | Exception | 11 (1 disabled) |
-| **合计** | **112** |
+| **合计** | **109** |
 
 ### 端到端集成测试 (PowerShell)
 
@@ -683,7 +744,7 @@ powershell -ExecutionPolicy Bypass -File tests/integration/run_pipeline.ps1
 | 编译器 | C# / .NET | 8.0 |
 | IL 解析 | Mono.Cecil | NuGet 最新 |
 | 运行时 | C++ | 20 |
-| GC | 自研 mark-sweep | 精确回收，malloc/free |
+| GC | BoehmGC (bdwgc) | v8.2.12 (FetchContent 自动下载) |
 | 构建系统 | dotnet + CMake | CMake 3.20+ |
 | 运行时分发 | CMake install + find_package | |
 | 编译器测试 | xUnit + coverlet | xUnit 2.9, coverlet 6.0 |
@@ -694,5 +755,6 @@ powershell -ExecutionPolicy Bypass -File tests/integration/run_pipeline.ps1
 
 - [Unity IL2CPP](https://docs.unity3d.com/Manual/IL2CPP.html)
 - [Mono.Cecil](https://github.com/jbevain/cecil)
+- [BoehmGC (bdwgc)](https://github.com/ivmai/bdwgc) — 保守式垃圾收集器
 - [NativeAOT](https://learn.microsoft.com/en-us/dotnet/core/deploying/native-aot/)
 - [ECMA-335 CLI Specification](https://www.ecma-international.org/publications-and-standards/standards/ecma-335/)

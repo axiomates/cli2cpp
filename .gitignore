@@ -10,6 +10,9 @@ CMakeCache.txt
 cmake_install.cmake
 Makefile
 
+# === FetchContent 缓存 ===
+.deps/
+
 # === CIL2CPP 生成的输出 ===
 output/
 output_*/

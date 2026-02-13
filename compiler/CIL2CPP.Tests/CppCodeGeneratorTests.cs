@@ -138,7 +138,7 @@ public class CppCodeGeneratorTests
         var output = gen.Generate();
 
         Assert.Contains("cil2cpp::TypeInfo* __type_info;", output.HeaderFile.Content);
-        Assert.Contains("cil2cpp::UInt32 __gc_mark;", output.HeaderFile.Content);
+        Assert.DoesNotContain("cil2cpp::UInt32 __gc_mark;", output.HeaderFile.Content);
         Assert.Contains("cil2cpp::UInt32 __sync_block;", output.HeaderFile.Content);
     }
 

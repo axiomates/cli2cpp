@@ -1,4 +1,21 @@
 @PACKAGE_INIT@
 
+# BoehmGC - create imported target for the bundled gc library
+if(NOT TARGET BDWgc::gc)
+    find_library(_CIL2CPP_GC_LIB gc PATHS "${PACKAGE_PREFIX_DIR}/lib" NO_DEFAULT_PATH)
+    find_library(_CIL2CPP_GC_LIB_DEBUG gcd PATHS "${PACKAGE_PREFIX_DIR}/lib" NO_DEFAULT_PATH)
+    if(_CIL2CPP_GC_LIB OR _CIL2CPP_GC_LIB_DEBUG)
+        add_library(BDWgc::gc STATIC IMPORTED)
+        if(_CIL2CPP_GC_LIB)
+            set_target_properties(BDWgc::gc PROPERTIES IMPORTED_LOCATION "${_CIL2CPP_GC_LIB}")
+        endif()
+        if(_CIL2CPP_GC_LIB_DEBUG)
+            set_target_properties(BDWgc::gc PROPERTIES IMPORTED_LOCATION_DEBUG "${_CIL2CPP_GC_LIB_DEBUG}")
+        endif()
+    endif()
+    unset(_CIL2CPP_GC_LIB CACHE)
+    unset(_CIL2CPP_GC_LIB_DEBUG CACHE)
+endif()
+
 include("${CMAKE_CURRENT_LIST_DIR}/cil2cppTargets.cmake")
 check_required_components(cil2cpp)

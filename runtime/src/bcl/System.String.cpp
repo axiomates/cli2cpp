@@ -135,12 +135,9 @@ String* string_literal(const char* utf8) {
         return it->second;
     }
 
-    // Create and intern
+    // Create and intern (BoehmGC auto-scans g_string_pool as a global root)
     String* str = string_create_utf8(utf8);
     g_string_pool[utf8] = str;
-
-    // Add to GC roots so it won't be collected
-    gc::add_root(reinterpret_cast<void**>(&g_string_pool[utf8]));
 
     return str;
 }
