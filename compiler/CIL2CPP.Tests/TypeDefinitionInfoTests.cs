@@ -655,4 +655,40 @@ public class TypeDefinitionInfoTests
         Assert.True(main.IsPublic);
         Assert.False(main.IsPrivate);
     }
+
+    // ===== Enum Underlying Type =====
+
+    [Fact]
+    public void EnumUnderlyingType_Color_IsSystemInt32()
+    {
+        using var reader = new AssemblyReader(_fixture.FeatureTestDllPath);
+        var color = reader.GetAllTypes().First(t => t.Name == "Color");
+        Assert.Equal("System.Int32", color.EnumUnderlyingType);
+    }
+
+    [Fact]
+    public void EnumFields_Color_HaveConstantValues()
+    {
+        using var reader = new AssemblyReader(_fixture.FeatureTestDllPath);
+        var color = reader.GetAllTypes().First(t => t.Name == "Color");
+        var fields = color.Fields.Where(f => f.IsStatic && f.ConstantValue != null).ToList();
+        Assert.True(fields.Count >= 3, "Color enum should have at least Red, Green, Blue constants");
+        var red = fields.FirstOrDefault(f => f.Name == "Red");
+        Assert.NotNull(red);
+        Assert.Equal(0, Convert.ToInt32(red!.ConstantValue));
+        var green = fields.FirstOrDefault(f => f.Name == "Green");
+        Assert.NotNull(green);
+        Assert.Equal(1, Convert.ToInt32(green!.ConstantValue));
+        var blue = fields.FirstOrDefault(f => f.Name == "Blue");
+        Assert.NotNull(blue);
+        Assert.Equal(2, Convert.ToInt32(blue!.ConstantValue));
+    }
+
+    [Fact]
+    public void EnumUnderlyingType_NonEnum_IsNull()
+    {
+        using var reader = new AssemblyReader(_fixture.FeatureTestDllPath);
+        var animal = reader.GetAllTypes().First(t => t.Name == "Animal");
+        Assert.Null(animal.EnumUnderlyingType);
+    }
 }

@@ -255,4 +255,74 @@ public class CppNameMapperTests
     {
         Assert.Equal(expected, CppNameMapper.GetDefaultValue(typeName));
     }
+
+    // ===== User Value Type Registration =====
+
+    [Fact]
+    public void RegisterValueType_ThenIsValueType_ReturnsTrue()
+    {
+        try
+        {
+            CppNameMapper.RegisterValueType("MyNamespace.MyStruct");
+            Assert.True(CppNameMapper.IsValueType("MyNamespace.MyStruct"));
+        }
+        finally
+        {
+            CppNameMapper.ClearValueTypes();
+        }
+    }
+
+    [Fact]
+    public void ClearValueTypes_ThenIsValueType_ReturnsFalse()
+    {
+        CppNameMapper.RegisterValueType("MyNamespace.MyStruct");
+        CppNameMapper.ClearValueTypes();
+        Assert.False(CppNameMapper.IsValueType("MyNamespace.MyStruct"));
+    }
+
+    [Fact]
+    public void GetDefaultValue_RegisteredValueType_ReturnsBraces()
+    {
+        try
+        {
+            CppNameMapper.RegisterValueType("MyNamespace.MyStruct");
+            Assert.Equal("{}", CppNameMapper.GetDefaultValue("MyNamespace.MyStruct"));
+        }
+        finally
+        {
+            CppNameMapper.ClearValueTypes();
+        }
+    }
+
+    [Fact]
+    public void GetCppTypeForDecl_RegisteredValueType_NoPointerSuffix()
+    {
+        try
+        {
+            CppNameMapper.RegisterValueType("MyNamespace.MyStruct");
+            var result = CppNameMapper.GetCppTypeForDecl("MyNamespace.MyStruct");
+            Assert.DoesNotContain("*", result);
+            Assert.Equal("MyNamespace_MyStruct", result);
+        }
+        finally
+        {
+            CppNameMapper.ClearValueTypes();
+        }
+    }
+
+    [Fact]
+    public void RegisterMultiple_ThenClear_AllGone()
+    {
+        CppNameMapper.RegisterValueType("NS.StructA");
+        CppNameMapper.RegisterValueType("NS.StructB");
+        CppNameMapper.RegisterValueType("NS.EnumC");
+        Assert.True(CppNameMapper.IsValueType("NS.StructA"));
+        Assert.True(CppNameMapper.IsValueType("NS.StructB"));
+        Assert.True(CppNameMapper.IsValueType("NS.EnumC"));
+
+        CppNameMapper.ClearValueTypes();
+        Assert.False(CppNameMapper.IsValueType("NS.StructA"));
+        Assert.False(CppNameMapper.IsValueType("NS.StructB"));
+        Assert.False(CppNameMapper.IsValueType("NS.EnumC"));
+    }
 }

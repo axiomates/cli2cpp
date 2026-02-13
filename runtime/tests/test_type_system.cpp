@@ -29,6 +29,8 @@ static TypeInfo ObjectType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 static TypeInfo IRunnableType = {
@@ -48,6 +50,8 @@ static TypeInfo IRunnableType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 static TypeInfo* DogInterfaces[] = { &IRunnableType };
@@ -69,6 +73,8 @@ static TypeInfo AnimalType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 static TypeInfo DogType = {
@@ -88,6 +94,8 @@ static TypeInfo DogType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 static TypeInfo CatType = {
@@ -107,6 +115,8 @@ static TypeInfo CatType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 class TypeSystemTest : public ::testing::Test {
@@ -209,4 +219,104 @@ TEST_F(TypeSystemTest, TypeFlags_BitwiseOr) {
 
 TEST_F(TypeSystemTest, TypeFlags_None) {
     EXPECT_FALSE(TypeFlags::None & TypeFlags::ValueType);
+}
+
+// ===== Interface VTable Dispatch =====
+
+static int32_t test_vtable_method(void* self) {
+    return 42;
+}
+
+static int32_t test_iface_method(void* self) {
+    return 99;
+}
+
+TEST_F(TypeSystemTest, GetInterfaceVTable_Found_ReturnsNonNull) {
+    // Set up Dog with an interface vtable for IRunnable
+    static void* irunnable_methods[] = { (void*)test_iface_method };
+    static InterfaceVTable dog_iface_vtables[] = {
+        { &IRunnableType, irunnable_methods, 1 }
+    };
+    DogType.interface_vtables = dog_iface_vtables;
+    DogType.interface_vtable_count = 1;
+
+    auto* result = type_get_interface_vtable(&DogType, &IRunnableType);
+    EXPECT_NE(result, nullptr);
+    EXPECT_EQ(result->interface_type, &IRunnableType);
+    EXPECT_EQ(result->method_count, 1u);
+
+    DogType.interface_vtables = nullptr;
+    DogType.interface_vtable_count = 0;
+}
+
+TEST_F(TypeSystemTest, GetInterfaceVTable_NotFound_ReturnsNull) {
+    auto* result = type_get_interface_vtable(&CatType, &IRunnableType);
+    EXPECT_EQ(result, nullptr);
+}
+
+TEST_F(TypeSystemTest, GetInterfaceVTable_InheritedFromBase) {
+    // Set up Animal with an interface vtable, Dog should inherit it
+    static TypeInfo IWalkableType = {
+        .name = "IWalkable",
+        .namespace_name = "Tests",
+        .full_name = "Tests.IWalkable",
+        .base_type = nullptr,
+        .interfaces = nullptr,
+        .interface_count = 0,
+        .instance_size = 0,
+        .element_size = 0,
+        .flags = TypeFlags::Interface,
+        .vtable = nullptr,
+        .fields = nullptr,
+        .field_count = 0,
+        .methods = nullptr,
+        .method_count = 0,
+        .default_ctor = nullptr,
+        .finalizer = nullptr,
+        .interface_vtables = nullptr,
+        .interface_vtable_count = 0,
+    };
+    static void* walkable_methods[] = { (void*)test_iface_method };
+    static InterfaceVTable animal_iface_vtables[] = {
+        { &IWalkableType, walkable_methods, 1 }
+    };
+    AnimalType.interface_vtables = animal_iface_vtables;
+    AnimalType.interface_vtable_count = 1;
+
+    // Dog inherits from Animal, should find Animal's interface vtable
+    auto* result = type_get_interface_vtable(&DogType, &IWalkableType);
+    EXPECT_NE(result, nullptr);
+    EXPECT_EQ(result->interface_type, &IWalkableType);
+
+    AnimalType.interface_vtables = nullptr;
+    AnimalType.interface_vtable_count = 0;
+}
+
+TEST_F(TypeSystemTest, VTable_FunctionPointer_Dispatches) {
+    static void* vtable_methods[] = { (void*)test_vtable_method };
+    static VTable dog_vtable = { &DogType, vtable_methods, 1 };
+    DogType.vtable = &dog_vtable;
+
+    // Simulate virtual dispatch through vtable
+    auto fn = (int32_t(*)(void*))DogType.vtable->methods[0];
+    EXPECT_EQ(fn(nullptr), 42);
+
+    DogType.vtable = nullptr;
+}
+
+TEST_F(TypeSystemTest, InterfaceVTable_FunctionPointer_Dispatches) {
+    static void* iface_methods[] = { (void*)test_iface_method };
+    static InterfaceVTable dog_iface_vtables[] = {
+        { &IRunnableType, iface_methods, 1 }
+    };
+    DogType.interface_vtables = dog_iface_vtables;
+    DogType.interface_vtable_count = 1;
+
+    auto* ivtable = type_get_interface_vtable(&DogType, &IRunnableType);
+    ASSERT_NE(ivtable, nullptr);
+    auto fn = (int32_t(*)(void*))ivtable->methods[0];
+    EXPECT_EQ(fn(nullptr), 99);
+
+    DogType.interface_vtables = nullptr;
+    DogType.interface_vtable_count = 0;
 }

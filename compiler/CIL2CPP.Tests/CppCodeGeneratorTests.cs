@@ -743,4 +743,271 @@ public class CppCodeGeneratorTests
 
         Assert.Contains("PUBLIC cil2cpp::runtime", output.CMakeFile!.Content);
     }
+
+    // ===== Phase 2: VTable code generation =====
+
+    [Fact]
+    public void Generate_WithVTable_EmitsVTableData()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType { ILFullName = "MyClass", CppName = "MyClass", Name = "MyClass", Namespace = "" };
+        var method = new IRMethod
+        {
+            Name = "Foo", CppName = "MyClass_Foo", DeclaringType = type,
+            IsStatic = false, IsVirtual = true, ReturnTypeCpp = "void", VTableSlot = 0
+        };
+        var bb = new IRBasicBlock { Id = 0 };
+        bb.Instructions.Add(new IRReturn());
+        method.BasicBlocks.Add(bb);
+        type.Methods.Add(method);
+        type.VTable.Add(new IRVTableEntry { Slot = 0, MethodName = "Foo", Method = method, DeclaringType = type });
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("_vtable_methods", output.SourceFile.Content);
+        Assert.Contains("_VTable", output.SourceFile.Content);
+        Assert.Contains("(void*)MyClass_Foo", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_WithInterfaces_EmitsInterfaceData()
+    {
+        var module = new IRModule { Name = "Test" };
+        var ifaceType = new IRType
+        {
+            ILFullName = "IFoo", CppName = "IFoo", Name = "IFoo", Namespace = "",
+            IsInterface = true
+        };
+        var ifaceMethod = new IRMethod
+        {
+            Name = "Bar", CppName = "IFoo_Bar", DeclaringType = ifaceType,
+            IsStatic = false, IsVirtual = true, IsAbstract = true, ReturnTypeCpp = "void"
+        };
+        ifaceType.Methods.Add(ifaceMethod);
+
+        var implType = new IRType
+        {
+            ILFullName = "MyImpl", CppName = "MyImpl", Name = "MyImpl", Namespace = ""
+        };
+        var implMethod = new IRMethod
+        {
+            Name = "Bar", CppName = "MyImpl_Bar", DeclaringType = implType,
+            IsStatic = false, ReturnTypeCpp = "void"
+        };
+        var bb = new IRBasicBlock { Id = 0 };
+        bb.Instructions.Add(new IRReturn());
+        implMethod.BasicBlocks.Add(bb);
+        implType.Methods.Add(implMethod);
+        implType.Interfaces.Add(ifaceType);
+        implType.InterfaceImpls.Add(new IRInterfaceImpl
+        {
+            Interface = ifaceType,
+            MethodImpls = { implMethod }
+        });
+
+        module.Types.Add(ifaceType);
+        module.Types.Add(implType);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("_interfaces", output.SourceFile.Content);
+        Assert.Contains("interface_vtables", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_WithFinalizer_EmitsWrapper()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType { ILFullName = "MyClass", CppName = "MyClass", Name = "MyClass", Namespace = "" };
+        var finalizerMethod = new IRMethod
+        {
+            Name = "Finalize", CppName = "MyClass_Finalize", DeclaringType = type,
+            IsStatic = false, IsFinalizer = true, ReturnTypeCpp = "void"
+        };
+        var bb = new IRBasicBlock { Id = 0 };
+        bb.Instructions.Add(new IRReturn());
+        finalizerMethod.BasicBlocks.Add(bb);
+        type.Methods.Add(finalizerMethod);
+        type.Finalizer = finalizerMethod;
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("_finalizer_wrapper", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_EnumType_EmitsTypedefAndConstants()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType
+        {
+            ILFullName = "Color", CppName = "Color", Name = "Color", Namespace = "",
+            IsEnum = true, IsValueType = true, IsSealed = true,
+            EnumUnderlyingType = "System.Int32"
+        };
+        type.StaticFields.Add(new IRField
+        {
+            Name = "Red", CppName = "f_Red", FieldTypeName = "Color",
+            IsStatic = true, ConstantValue = 0
+        });
+        type.StaticFields.Add(new IRField
+        {
+            Name = "Green", CppName = "f_Green", FieldTypeName = "Color",
+            IsStatic = true, ConstantValue = 1
+        });
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("using Color = int32_t", output.HeaderFile.Content);
+        Assert.Contains("constexpr", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_EnumType_NoForwardDeclaration()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType
+        {
+            ILFullName = "Color", CppName = "Color", Name = "Color", Namespace = "",
+            IsEnum = true, IsValueType = true, IsSealed = true,
+            EnumUnderlyingType = "System.Int32"
+        };
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.DoesNotContain("struct Color;", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_InterfaceType_NoStructDefinition()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType
+        {
+            ILFullName = "IFoo", CppName = "IFoo", Name = "IFoo", Namespace = "",
+            IsInterface = true
+        };
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.DoesNotContain("struct IFoo {", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_TypeWithVTable_HasVTablePointer()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType { ILFullName = "MyClass", CppName = "MyClass", Name = "MyClass", Namespace = "" };
+        var method = new IRMethod
+        {
+            Name = "Foo", CppName = "MyClass_Foo", DeclaringType = type,
+            IsStatic = false, IsVirtual = true, ReturnTypeCpp = "void"
+        };
+        var bb = new IRBasicBlock { Id = 0 };
+        bb.Instructions.Add(new IRReturn());
+        method.BasicBlocks.Add(bb);
+        type.Methods.Add(method);
+        type.VTable.Add(new IRVTableEntry { Slot = 0, MethodName = "Foo", Method = method, DeclaringType = type });
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains(".vtable = &MyClass_VTable", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_TypeWithFinalizer_HasFinalizerPointer()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType { ILFullName = "MyClass", CppName = "MyClass", Name = "MyClass", Namespace = "" };
+        var finalizerMethod = new IRMethod
+        {
+            Name = "Finalize", CppName = "MyClass_Finalize", DeclaringType = type,
+            IsStatic = false, IsFinalizer = true, ReturnTypeCpp = "void"
+        };
+        var bb = new IRBasicBlock { Id = 0 };
+        bb.Instructions.Add(new IRReturn());
+        finalizerMethod.BasicBlocks.Add(bb);
+        type.Methods.Add(finalizerMethod);
+        type.Finalizer = finalizerMethod;
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("finalizer", output.SourceFile.Content);
+        Assert.Contains("MyClass_finalizer_wrapper", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_TypeWithInterfaceImpls_HasInterfaceVtables()
+    {
+        var module = new IRModule { Name = "Test" };
+        var ifaceType = new IRType
+        {
+            ILFullName = "IFoo", CppName = "IFoo", Name = "IFoo", Namespace = "",
+            IsInterface = true
+        };
+        var implType = new IRType { ILFullName = "MyImpl", CppName = "MyImpl", Name = "MyImpl", Namespace = "" };
+        implType.Interfaces.Add(ifaceType);
+        implType.InterfaceImpls.Add(new IRInterfaceImpl
+        {
+            Interface = ifaceType,
+            MethodImpls = { null }  // One unimplemented method
+        });
+        module.Types.Add(ifaceType);
+        module.Types.Add(implType);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("interface_vtables", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_EnumType_HasEnumFlag()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType
+        {
+            ILFullName = "Color", CppName = "Color", Name = "Color", Namespace = "",
+            IsEnum = true, IsValueType = true, IsSealed = true,
+            EnumUnderlyingType = "System.Int32"
+        };
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("Enum", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_InterfaceType_HasInterfaceFlag()
+    {
+        var module = new IRModule { Name = "Test" };
+        var type = new IRType
+        {
+            ILFullName = "IFoo", CppName = "IFoo", Name = "IFoo", Namespace = "",
+            IsInterface = true
+        };
+        module.Types.Add(type);
+
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("Interface", output.SourceFile.Content);
+    }
 }

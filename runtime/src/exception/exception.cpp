@@ -204,6 +204,8 @@ TypeInfo NullReferenceException_TypeInfo = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 TypeInfo IndexOutOfRangeException_TypeInfo = {
@@ -223,6 +225,8 @@ TypeInfo IndexOutOfRangeException_TypeInfo = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 TypeInfo InvalidCastException_TypeInfo = {
@@ -242,6 +246,8 @@ TypeInfo InvalidCastException_TypeInfo = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 } // namespace cil2cpp

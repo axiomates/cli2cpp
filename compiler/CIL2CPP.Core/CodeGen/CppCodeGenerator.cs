@@ -59,20 +59,19 @@ public class CppCodeGenerator
             .Where(t => !CppNameMapper.IsCompilerGeneratedType(t.ILFullName))
             .ToList();
 
-        // Forward declarations
+        // Forward declarations (skip interfaces and enums — no struct defs)
         sb.AppendLine("// ===== Forward Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface) continue;
+            if (type.IsInterface || type.IsEnum) continue;
             sb.AppendLine($"struct {type.CppName};");
         }
         sb.AppendLine();
 
-        // Type info declarations
+        // Type info declarations (includes interfaces for dispatch)
         sb.AppendLine("// ===== Type Info Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface) continue;
             sb.AppendLine($"extern cil2cpp::TypeInfo {type.CppName}_TypeInfo;");
         }
         // Primitive type TypeInfo declarations (for array element types)
@@ -87,12 +86,18 @@ public class CppCodeGenerator
         foreach (var type in userTypes)
         {
             if (type.IsInterface) continue;
+            if (type.IsEnum)
+            {
+                GenerateEnumDefinition(sb, type);
+                continue;
+            }
             GenerateStructDefinition(sb, type);
         }
 
         // Static field storage declarations
         foreach (var type in userTypes)
         {
+            if (type.IsEnum) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"// Static fields for {type.ILFullName}");
@@ -267,12 +272,13 @@ public class CppCodeGenerator
         // Static field storage
         foreach (var type in userTypes)
         {
+            if (type.IsEnum) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"{type.CppName}_Statics {type.CppName}_statics = {{}};");
             }
         }
-        if (userTypes.Any(t => t.StaticFields.Count > 0))
+        if (userTypes.Any(t => !t.IsEnum && t.StaticFields.Count > 0))
         {
             sb.AppendLine();
         }
@@ -300,16 +306,26 @@ public class CppCodeGenerator
                 sb.AppendLine($"    .method_count = 0,");
                 sb.AppendLine($"    .default_ctor = nullptr,");
                 sb.AppendLine($"    .finalizer = nullptr,");
+                sb.AppendLine($"    .interface_vtables = nullptr,");
+                sb.AppendLine($"    .interface_vtable_count = 0,");
                 sb.AppendLine($"}};");
             }
             sb.AppendLine();
         }
 
-        // Type info definitions
+        // VTable data
+        EmitVTableData(sb, userTypes);
+
+        // Interface data
+        EmitInterfaceData(sb, userTypes);
+
+        // Finalizer wrappers
+        EmitFinalizerWrappers(sb, userTypes);
+
+        // Type info definitions (all types including interfaces)
         sb.AppendLine("// ===== Type Info =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface) continue;
             GenerateTypeInfo(sb, type);
         }
         sb.AppendLine();
@@ -358,30 +374,49 @@ public class CppCodeGenerator
     {
         var baseName = type.BaseType != null ? $"&{type.BaseType.CppName}_TypeInfo" : "nullptr";
 
+        // Interfaces array
+        var interfacesExpr = type.Interfaces.Count > 0 ? $"{type.CppName}_interfaces" : "nullptr";
+
+        // VTable
+        var vtableExpr = (!type.IsInterface && type.VTable.Count > 0) ? $"&{type.CppName}_VTable" : "nullptr";
+
+        // Interface vtables
+        var ifaceVtablesExpr = type.InterfaceImpls.Count > 0 ? $"{type.CppName}_interface_vtables" : "nullptr";
+
+        // Finalizer
+        var finalizerExpr = type.Finalizer != null ? $"{type.CppName}_finalizer_wrapper" : "nullptr";
+
+        // Instance size (interfaces have no struct)
+        var instanceSize = type.IsInterface ? "0" : $"sizeof({type.CppName})";
+
+        // Flags
+        var flagParts = new List<string>();
+        if (type.IsValueType) flagParts.Add("cil2cpp::TypeFlags::ValueType");
+        if (type.IsInterface) flagParts.Add("cil2cpp::TypeFlags::Interface");
+        if (type.IsAbstract) flagParts.Add("cil2cpp::TypeFlags::Abstract");
+        if (type.IsSealed) flagParts.Add("cil2cpp::TypeFlags::Sealed");
+        if (type.IsEnum) flagParts.Add("cil2cpp::TypeFlags::Enum");
+        var flagsStr = flagParts.Count > 0 ? string.Join(" | ", flagParts) : "cil2cpp::TypeFlags::None";
+
         sb.AppendLine($"cil2cpp::TypeInfo {type.CppName}_TypeInfo = {{");
         sb.AppendLine($"    .name = \"{type.Name}\",");
         sb.AppendLine($"    .namespace_name = \"{type.Namespace}\",");
         sb.AppendLine($"    .full_name = \"{type.ILFullName}\",");
         sb.AppendLine($"    .base_type = {baseName},");
-        sb.AppendLine($"    .interfaces = nullptr,");
-        sb.AppendLine($"    .interface_count = 0,");
-        sb.AppendLine($"    .instance_size = sizeof({type.CppName}),");
+        sb.AppendLine($"    .interfaces = {interfacesExpr},");
+        sb.AppendLine($"    .interface_count = {type.Interfaces.Count},");
+        sb.AppendLine($"    .instance_size = {instanceSize},");
         sb.AppendLine($"    .element_size = 0,");
-
-        var flags = "cil2cpp::TypeFlags::None";
-        if (type.IsValueType) flags = "cil2cpp::TypeFlags::ValueType";
-        if (type.IsInterface) flags = "cil2cpp::TypeFlags::Interface";
-        if (type.IsAbstract) flags += " | cil2cpp::TypeFlags::Abstract";
-        if (type.IsSealed) flags += " | cil2cpp::TypeFlags::Sealed";
-
-        sb.AppendLine($"    .flags = {flags},");
-        sb.AppendLine($"    .vtable = nullptr,");
+        sb.AppendLine($"    .flags = {flagsStr},");
+        sb.AppendLine($"    .vtable = {vtableExpr},");
         sb.AppendLine($"    .fields = nullptr,");
         sb.AppendLine($"    .field_count = 0,");
         sb.AppendLine($"    .methods = nullptr,");
         sb.AppendLine($"    .method_count = 0,");
         sb.AppendLine($"    .default_ctor = nullptr,");
-        sb.AppendLine($"    .finalizer = nullptr,");
+        sb.AppendLine($"    .finalizer = {finalizerExpr},");
+        sb.AppendLine($"    .interface_vtables = {ifaceVtablesExpr},");
+        sb.AppendLine($"    .interface_vtable_count = {type.InterfaceImpls.Count},");
         sb.AppendLine("};");
     }
 
@@ -624,6 +659,109 @@ public class CppCodeGenerator
             FileName = "CMakeLists.txt",
             Content = sb.ToString()
         };
+    }
+
+    private void GenerateEnumDefinition(StringBuilder sb, IRType type)
+    {
+        var underlyingCppType = CppNameMapper.GetCppTypeForDecl(type.EnumUnderlyingType ?? "System.Int32");
+        sb.AppendLine($"// {type.ILFullName} (enum)");
+        sb.AppendLine($"using {type.CppName} = {underlyingCppType};");
+
+        // Emit named constants
+        foreach (var field in type.StaticFields)
+        {
+            if (field.ConstantValue != null)
+            {
+                sb.AppendLine($"constexpr {underlyingCppType} {type.CppName}_{field.CppName} = {field.ConstantValue};");
+            }
+        }
+        sb.AppendLine();
+    }
+
+    private void EmitVTableData(StringBuilder sb, List<IRType> userTypes)
+    {
+        bool any = false;
+        foreach (var type in userTypes)
+        {
+            if (type.IsInterface || type.VTable.Count == 0) continue;
+            if (!any)
+            {
+                sb.AppendLine("// ===== VTable Data =====");
+                any = true;
+            }
+
+            // Method pointer array (null Method = System.Object base virtual, use BCL fallback)
+            var methods = string.Join(", ", type.VTable.Select(e =>
+            {
+                if (e.Method != null && !e.Method.IsAbstract) return $"(void*){e.Method.CppName}";
+                return e.MethodName switch
+                {
+                    "ToString" => "(void*)cil2cpp::object_to_string",
+                    "Equals" => "(void*)cil2cpp::object_equals",
+                    "GetHashCode" => "(void*)cil2cpp::object_get_hash_code",
+                    _ => "nullptr"
+                };
+            }));
+            sb.AppendLine($"static void* {type.CppName}_vtable_methods[] = {{ {methods} }};");
+            sb.AppendLine($"static cil2cpp::VTable {type.CppName}_VTable = {{ &{type.CppName}_TypeInfo, {type.CppName}_vtable_methods, {type.VTable.Count} }};");
+        }
+        if (any) sb.AppendLine();
+    }
+
+    private void EmitInterfaceData(StringBuilder sb, List<IRType> userTypes)
+    {
+        bool any = false;
+        foreach (var type in userTypes)
+        {
+            if (type.IsInterface || type.Interfaces.Count == 0) continue;
+            if (!any)
+            {
+                sb.AppendLine("// ===== Interface Data =====");
+                any = true;
+            }
+
+            // Interfaces pointer array
+            var ifaces = string.Join(", ", type.Interfaces.Select(i => $"&{i.CppName}_TypeInfo"));
+            sb.AppendLine($"static cil2cpp::TypeInfo* {type.CppName}_interfaces[] = {{ {ifaces} }};");
+        }
+
+        // Interface vtable method arrays and InterfaceVTable arrays
+        foreach (var type in userTypes)
+        {
+            if (type.IsInterface || type.InterfaceImpls.Count == 0) continue;
+
+            foreach (var impl in type.InterfaceImpls)
+            {
+                var methods = string.Join(", ", impl.MethodImpls.Select(m => m != null ? $"(void*){m.CppName}" : "nullptr"));
+                sb.AppendLine($"static void* {type.CppName}_iface_{impl.Interface.CppName}_methods[] = {{ {methods} }};");
+            }
+
+            var entries = type.InterfaceImpls.Select(impl =>
+                $"{{ &{impl.Interface.CppName}_TypeInfo, {type.CppName}_iface_{impl.Interface.CppName}_methods, {impl.MethodImpls.Count} }}");
+            sb.AppendLine($"static cil2cpp::InterfaceVTable {type.CppName}_interface_vtables[] = {{");
+            sb.AppendLine($"    {string.Join(",\n    ", entries)}");
+            sb.AppendLine("};");
+        }
+        if (any) sb.AppendLine();
+    }
+
+    private void EmitFinalizerWrappers(StringBuilder sb, List<IRType> userTypes)
+    {
+        bool any = false;
+        foreach (var type in userTypes)
+        {
+            if (type.Finalizer == null) continue;
+            if (!any)
+            {
+                sb.AppendLine("// ===== Finalizer Wrappers =====");
+                any = true;
+            }
+
+            sb.AppendLine($"static void {type.CppName}_finalizer_wrapper(cil2cpp::Object* obj) {{");
+            sb.AppendLine($"    {type.Finalizer.CppName}(({type.CppName}*)obj);");
+            sb.AppendLine("}");
+        }
+        if (any) sb.AppendLine();
     }
 
     private static string EscapeString(string s)

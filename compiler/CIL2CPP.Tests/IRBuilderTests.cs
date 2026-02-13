@@ -828,4 +828,108 @@ public class IRBuilderTests
         var instrs = GetMethodInstructions(module, "Program", "TestConstants");
         Assert.Contains(instrs, i => i is IRBinaryOp);
     }
+
+    // ===== Phase 2: Enum support =====
+
+    [Fact]
+    public void Build_FeatureTest_EnumUnderlyingType_Set()
+    {
+        var module = BuildFeatureTest();
+        var color = module.FindType("Color")!;
+        Assert.Equal("System.Int32", color.EnumUnderlyingType);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_EnumConstants_Extracted()
+    {
+        var module = BuildFeatureTest();
+        var color = module.FindType("Color")!;
+        var constFields = color.StaticFields.Where(f => f.ConstantValue != null).ToList();
+        Assert.True(constFields.Count >= 3, "Color enum should have at least Red, Green, Blue");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_EnumNoValueField()
+    {
+        var module = BuildFeatureTest();
+        var color = module.FindType("Color")!;
+        Assert.DoesNotContain(color.Fields, f => f.Name == "value__");
+    }
+
+    // ===== Phase 2: VTable dispatch =====
+
+    [Fact]
+    public void Build_FeatureTest_VirtualCall_HasVTableSlot()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestVirtualCalls");
+        var virtualCalls = instrs.OfType<IRCall>().Where(c => c.IsVirtual && c.VTableSlot >= 0).ToList();
+        Assert.True(virtualCalls.Count > 0, "TestVirtualCalls should generate virtual dispatch with VTableSlot");
+    }
+
+    // ===== Phase 2: Interface dispatch =====
+
+    [Fact]
+    public void Build_FeatureTest_Duck_HasInterfaceImpls()
+    {
+        var module = BuildFeatureTest();
+        var duck = module.FindType("Duck")!;
+        Assert.True(duck.InterfaceImpls.Count > 0, "Duck should implement ISpeak");
+        Assert.Contains(duck.InterfaceImpls, impl => impl.Interface.Name == "ISpeak");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_InterfaceDispatch_HasInterfaceCall()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestInterfaceDispatch");
+        var ifaceCalls = instrs.OfType<IRCall>().Where(c => c.IsInterfaceCall).ToList();
+        Assert.True(ifaceCalls.Count > 0, "TestInterfaceDispatch should generate interface dispatch calls");
+    }
+
+    // ===== Phase 2: Finalizer =====
+
+    [Fact]
+    public void Build_FeatureTest_Resource_HasFinalizer()
+    {
+        var module = BuildFeatureTest();
+        var resource = module.FindType("Resource")!;
+        Assert.NotNull(resource.Finalizer);
+    }
+
+    // ===== Phase 2: Operator overloading =====
+
+    [Fact]
+    public void Build_FeatureTest_Vector2_HasOperator()
+    {
+        var module = BuildFeatureTest();
+        var vector2 = module.FindType("Vector2")!;
+        var opMethod = vector2.Methods.FirstOrDefault(m => m.IsOperator);
+        Assert.NotNull(opMethod);
+        Assert.Equal("op_Addition", opMethod!.OperatorName);
+    }
+
+    // ===== Phase 2: User value type registration =====
+
+    [Fact]
+    public void Build_FeatureTest_UserValueType_Registered()
+    {
+        var module = BuildFeatureTest();
+        // After building, Point and Vector2 should be registered as value types
+        Assert.True(CppNameMapper.IsValueType("Point"), "Point should be registered as value type");
+        Assert.True(CppNameMapper.IsValueType("Vector2"), "Vector2 should be registered as value type");
+    }
+
+    // ===== Phase 2: VTable seeded with Object methods =====
+
+    [Fact]
+    public void Build_FeatureTest_VTable_SeededWithObjectMethods()
+    {
+        var module = BuildFeatureTest();
+        var animal = module.FindType("Animal")!;
+        var vtableNames = animal.VTable.Select(e => e.MethodName).ToList();
+        Assert.Contains("ToString", vtableNames);
+        Assert.Contains("Equals", vtableNames);
+        Assert.Contains("GetHashCode", vtableNames);
+    }
 }

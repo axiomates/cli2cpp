@@ -36,6 +36,9 @@ public class IRMethod
     public bool IsConstructor { get; set; }
     public bool IsStaticConstructor { get; set; }
     public bool IsEntryPoint { get; set; }
+    public bool IsFinalizer { get; set; }
+    public bool IsOperator { get; set; }
+    public string? OperatorName { get; set; }
     public int VTableSlot { get; set; } = -1;
 
     /// <summary>
@@ -155,16 +158,32 @@ public class IRCall : IRInstruction
     public List<string> Arguments { get; } = new();
     public string? ResultVar { get; set; }
     public bool IsVirtual { get; set; }
-    public string? VTableAccess { get; set; }
+    public int VTableSlot { get; set; } = -1;
+    public string? VTableReturnType { get; set; }
+    public List<string>? VTableParamTypes { get; set; }
+    public bool IsInterfaceCall { get; set; }
+    public string? InterfaceTypeCppName { get; set; }
 
     public override string ToCpp()
     {
         var args = string.Join(", ", Arguments);
         string call;
 
-        if (IsVirtual && VTableAccess != null)
+        if (IsVirtual && IsInterfaceCall && VTableSlot >= 0 && Arguments.Count > 0)
         {
-            call = $"{VTableAccess}({args})";
+            var paramTypesStr = VTableParamTypes != null
+                ? string.Join(", ", VTableParamTypes) : "void*";
+            var fnPtrType = $"{VTableReturnType ?? "void"}(*)({paramTypesStr})";
+            var thisExpr = Arguments[0];
+            call = $"(({fnPtrType})(cil2cpp::type_get_interface_vtable_checked(((cil2cpp::Object*){thisExpr})->__type_info, &{InterfaceTypeCppName}_TypeInfo)->methods[{VTableSlot}]))({args})";
+        }
+        else if (IsVirtual && VTableSlot >= 0 && Arguments.Count > 0)
+        {
+            var paramTypesStr = VTableParamTypes != null
+                ? string.Join(", ", VTableParamTypes) : "void*";
+            var fnPtrType = $"{VTableReturnType ?? "void"}(*)({paramTypesStr})";
+            var thisExpr = Arguments[0];
+            call = $"(({fnPtrType})(((cil2cpp::Object*){thisExpr})->__type_info->vtable->methods[{VTableSlot}]))({args})";
         }
         else
         {

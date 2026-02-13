@@ -25,6 +25,8 @@ static TypeInfo TestObjType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 class ObjectTest : public ::testing::Test {
@@ -109,6 +111,8 @@ static TypeInfo BaseType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 static TypeInfo DerivedType = {
@@ -128,6 +132,8 @@ static TypeInfo DerivedType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 TEST_F(ObjectTest, IsInstanceOf_SameType_True) {

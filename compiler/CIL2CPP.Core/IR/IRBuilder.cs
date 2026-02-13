@@ -27,6 +27,8 @@ public class IRBuilder
     /// </summary>
     public IRModule Build()
     {
+        CppNameMapper.ClearValueTypes();
+
         // Pass 1: Create all type shells (no fields/methods yet)
         foreach (var typeDef in _reader.GetAllTypes())
         {
@@ -53,7 +55,8 @@ public class IRBuilder
             }
         }
 
-        // Pass 3: Convert methods
+        // Pass 3: Create method shells (no body yet — needed for VTable)
+        var methodBodies = new List<(IL.MethodInfo MethodDef, IRMethod IRMethod)>();
         foreach (var typeDef in _reader.GetAllTypes())
         {
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType))
@@ -69,14 +72,35 @@ public class IRBuilder
                         irMethod.IsEntryPoint = true;
                         _module.EntryPoint = irMethod;
                     }
+
+                    // Track finalizer
+                    if (irMethod.IsFinalizer)
+                        irType.Finalizer = irMethod;
+
+                    // Save for body conversion later
+                    if (methodDef.HasBody && !methodDef.IsAbstract)
+                        methodBodies.Add((methodDef, irMethod));
                 }
             }
         }
 
-        // Pass 4: Build vtables
+        // Pass 4: Build vtables (needs method shells with IsVirtual)
         foreach (var irType in _module.Types)
         {
             BuildVTable(irType);
+        }
+
+        // Pass 5: Build interface implementation maps
+        foreach (var irType in _module.Types)
+        {
+            if (!irType.IsInterface && !irType.IsValueType)
+                BuildInterfaceImpls(irType);
+        }
+
+        // Pass 6: Convert method bodies (vtables are now available for virtual dispatch)
+        foreach (var (methodDef, irMethod) in methodBodies)
+        {
+            ConvertMethodBody(methodDef, irMethod);
         }
 
         return _module;
@@ -86,7 +110,7 @@ public class IRBuilder
     {
         var cppName = CppNameMapper.MangleTypeName(typeDef.FullName);
 
-        return new IRType
+        var irType = new IRType
         {
             ILFullName = typeDef.FullName,
             CppName = cppName,
@@ -98,6 +122,15 @@ public class IRBuilder
             IsSealed = typeDef.IsSealed,
             IsEnum = typeDef.IsEnum,
         };
+
+        if (typeDef.IsEnum)
+            irType.EnumUnderlyingType = typeDef.EnumUnderlyingType ?? "System.Int32";
+
+        // Register value types for CppNameMapper so it doesn't add pointer suffix
+        if (typeDef.IsValueType)
+            CppNameMapper.RegisterValueType(typeDef.FullName);
+
+        return irType;
     }
 
     private void PopulateTypeDetails(TypeDefinitionInfo typeDef, IRType irType)
@@ -117,9 +150,10 @@ public class IRBuilder
             }
         }
 
-        // Fields
+        // Fields (skip CLR-internal value__ field for enums)
         foreach (var fieldDef in typeDef.Fields)
         {
+            if (irType.IsEnum && fieldDef.Name == "value__") continue;
             var irField = new IRField
             {
                 Name = fieldDef.Name,
@@ -134,6 +168,8 @@ public class IRBuilder
             {
                 irField.FieldType = fieldType;
             }
+
+            irField.ConstantValue = fieldDef.ConstantValue;
 
             if (fieldDef.IsStatic)
                 irType.StaticFields.Add(irField);
@@ -207,6 +243,18 @@ public class IRBuilder
             IsStaticConstructor = methodDef.IsConstructor && methodDef.IsStatic,
         };
 
+        // Detect finalizer
+        if (methodDef.Name == "Finalize" && !methodDef.IsStatic && methodDef.IsVirtual
+            && methodDef.Parameters.Count == 0 && methodDef.ReturnTypeName == "System.Void")
+            irMethod.IsFinalizer = true;
+
+        // Detect operator methods
+        if (methodDef.Name.StartsWith("op_"))
+        {
+            irMethod.IsOperator = true;
+            irMethod.OperatorName = methodDef.Name;
+        }
+
         // Resolve return type
         if (_typeCache.TryGetValue(methodDef.ReturnTypeName, out var retType))
         {
@@ -243,12 +291,7 @@ public class IRBuilder
             });
         }
 
-        // Convert method body to IR instructions
-        if (methodDef.HasBody && !methodDef.IsAbstract)
-        {
-            ConvertMethodBody(methodDef, irMethod);
-        }
-
+        // Note: method body is converted in a later pass (after VTables are built)
         return irMethod;
     }
 
@@ -1153,6 +1196,74 @@ public class IRBuilder
 
         irCall.Arguments.AddRange(args);
 
+        // For virtual BCL methods on System.Object (ToString, Equals, GetHashCode),
+        // prefer vtable dispatch so user overrides are called correctly
+        if (mappedName != null && isVirtual && methodRef.HasThis
+            && methodRef.DeclaringType.FullName == "System.Object"
+            && methodRef.Name is "ToString" or "Equals" or "GetHashCode")
+        {
+            mappedName = null;
+        }
+
+        // Virtual dispatch detection
+        if (isVirtual && methodRef.HasThis && mappedName == null)
+        {
+            var declaringTypeName = methodRef.DeclaringType.FullName;
+            var resolved = _typeCache.GetValueOrDefault(declaringTypeName);
+
+            if (resolved != null && resolved.IsInterface)
+            {
+                // Interface dispatch — find slot by name (skipping constructors)
+                int ifaceSlot = 0;
+                bool found = false;
+                foreach (var m in resolved.Methods)
+                {
+                    if (m.IsConstructor || m.IsStaticConstructor) continue;
+                    if (m.Name == methodRef.Name) { found = true; break; }
+                    ifaceSlot++;
+                }
+                if (found)
+                {
+                    irCall.IsVirtual = true;
+                    irCall.IsInterfaceCall = true;
+                    irCall.InterfaceTypeCppName = resolved.CppName;
+                    irCall.VTableSlot = ifaceSlot;
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
+                }
+            }
+            else if (resolved != null && !resolved.IsValueType)
+            {
+                // Class virtual dispatch
+                var entry = resolved.VTable.FirstOrDefault(e => e.MethodName == methodRef.Name);
+                if (entry != null)
+                {
+                    irCall.IsVirtual = true;
+                    irCall.VTableSlot = entry.Slot;
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
+                }
+            }
+            else if (resolved == null && declaringTypeName == "System.Object")
+            {
+                // System.Object is not in _typeCache but has well-known vtable slots
+                var slot = methodRef.Name switch
+                {
+                    "ToString" => 0,
+                    "Equals" => 1,
+                    "GetHashCode" => 2,
+                    _ => -1
+                };
+                if (slot >= 0)
+                {
+                    irCall.IsVirtual = true;
+                    irCall.VTableSlot = slot;
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
+                }
+            }
+        }
+
         // Return value
         if (methodRef.ReturnType.FullName != "System.Void")
         {
@@ -1287,6 +1398,14 @@ public class IRBuilder
                 });
             }
         }
+        else if (!irType.IsInterface && !irType.IsValueType)
+        {
+            // Root type (base = System.Object, not in _typeCache)
+            // Seed with System.Object virtual method slots so overrides can replace them
+            irType.VTable.Add(new IRVTableEntry { Slot = 0, MethodName = "ToString", Method = null, DeclaringType = null });
+            irType.VTable.Add(new IRVTableEntry { Slot = 1, MethodName = "Equals", Method = null, DeclaringType = null });
+            irType.VTable.Add(new IRVTableEntry { Slot = 2, MethodName = "GetHashCode", Method = null, DeclaringType = null });
+        }
 
         // Override or add virtual methods
         foreach (var method in irType.Methods.Where(m => m.IsVirtual))
@@ -1313,6 +1432,43 @@ public class IRBuilder
                 method.VTableSlot = slot;
             }
         }
+    }
+
+    private void BuildInterfaceImpls(IRType irType)
+    {
+        foreach (var iface in irType.Interfaces)
+        {
+            var impl = new IRInterfaceImpl { Interface = iface };
+            foreach (var ifaceMethod in iface.Methods)
+            {
+                // Skip constructors — only map actual interface methods
+                if (ifaceMethod.IsConstructor || ifaceMethod.IsStaticConstructor) continue;
+                var implMethod = FindImplementingMethod(irType, ifaceMethod.Name);
+                impl.MethodImpls.Add(implMethod); // null if not found — keeps slot alignment
+            }
+            irType.InterfaceImpls.Add(impl);
+        }
+    }
+
+    private static IRMethod? FindImplementingMethod(IRType type, string methodName)
+    {
+        var current = type;
+        while (current != null)
+        {
+            var method = current.Methods.FirstOrDefault(m => m.Name == methodName && !m.IsAbstract && !m.IsStatic);
+            if (method != null) return method;
+            current = current.BaseType;
+        }
+        return null;
+    }
+
+    private List<string> BuildVTableParamTypes(MethodReference methodRef)
+    {
+        var types = new List<string>();
+        types.Add(CppNameMapper.MangleTypeName(methodRef.DeclaringType.FullName) + "*");
+        foreach (var p in methodRef.Parameters)
+            types.Add(CppNameMapper.GetCppTypeForDecl(p.ParameterType.FullName));
+        return types;
     }
 
     private string GetArgName(IRMethod method, int index)

@@ -64,6 +64,15 @@ struct VTable {
 };
 
 /**
+ * Interface virtual method table - maps an interface to method pointers.
+ */
+struct InterfaceVTable {
+    TypeInfo* interface_type;
+    void** methods;
+    UInt32 method_count;
+};
+
+/**
  * Runtime type information.
  */
 struct TypeInfo {
@@ -96,6 +105,10 @@ struct TypeInfo {
     // Constructor
     void (*default_ctor)(Object*);
     void (*finalizer)(Object*);
+
+    // Interface dispatch tables
+    InterfaceVTable* interface_vtables;
+    UInt32 interface_vtable_count;
 };
 
 /**
@@ -112,6 +125,16 @@ Boolean type_is_subclass_of(TypeInfo* type, TypeInfo* base_type);
  * Check if type implements an interface.
  */
 Boolean type_implements_interface(TypeInfo* type, TypeInfo* interface_type);
+
+/**
+ * Get interface vtable for a type (for interface dispatch).
+ */
+InterfaceVTable* type_get_interface_vtable(TypeInfo* type, TypeInfo* interface_type);
+
+/**
+ * Get interface vtable for a type, throwing InvalidCastException if not found.
+ */
+InterfaceVTable* type_get_interface_vtable_checked(TypeInfo* type, TypeInfo* interface_type);
 
 /**
  * Get type by full name (for reflection).

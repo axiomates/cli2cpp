@@ -75,6 +75,27 @@ Boolean type_implements_interface(TypeInfo* type, TypeInfo* interface_type) {
     return false;
 }
 
+InterfaceVTable* type_get_interface_vtable(TypeInfo* type, TypeInfo* interface_type) {
+    TypeInfo* current = type;
+    while (current) {
+        for (UInt32 i = 0; i < current->interface_vtable_count; i++) {
+            if (current->interface_vtables[i].interface_type == interface_type) {
+                return &current->interface_vtables[i];
+            }
+        }
+        current = current->base_type;
+    }
+    return nullptr;
+}
+
+InterfaceVTable* type_get_interface_vtable_checked(TypeInfo* type, TypeInfo* interface_type) {
+    auto* result = type_get_interface_vtable(type, interface_type);
+    if (!result) {
+        throw_invalid_cast();
+    }
+    return result;
+}
+
 TypeInfo* type_get_by_name(const char* full_name) {
     auto it = g_type_registry.find(full_name);
     if (it != g_type_registry.end()) {

@@ -35,6 +35,8 @@ TypeInfo String_TypeInfo = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 } // namespace System

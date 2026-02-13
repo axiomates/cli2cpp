@@ -30,6 +30,8 @@ static TypeInfo TestType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 class GCTest : public ::testing::Test {
@@ -139,6 +141,8 @@ static TypeInfo IntElementType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 TEST_F(GCTest, AllocArray_ReturnsNonNull) {
@@ -181,6 +185,8 @@ static TypeInfo FinalizableType = {
     .method_count = 0,
     .default_ctor = nullptr,
     .finalizer = test_finalizer,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
 };
 
 TEST_F(GCTest, Finalizer_IsRegistered) {

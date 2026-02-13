@@ -9,7 +9,7 @@
 ```
 
 1. **IL 解析** — Mono.Cecil 读取 .NET 程序集中的 IL 字节码
-2. **IR 构建** — 将 IL 指令转换为中间表示（4 遍：类型外壳 → 字段/基类 → 方法体 → VTable）
+2. **IR 构建** — 将 IL 指令转换为中间表示（6 遍：类型外壳 → 字段/基类 → 方法壳 → VTable/接口 → 方法体）
 3. **C++ 生成** — 将 IR 翻译为 C++ 头文件、源文件、入口点和 CMakeLists.txt
 4. **原生编译** — 使用 C++ 编译器编译生成的代码，通过 `find_package` 链接 CIL2CPP 运行时
 
@@ -176,15 +176,17 @@ dotnet run --project compiler/CIL2CPP.CLI -- codegen \
 ```
                   CIL2CPP 编译器内部
 ┌─────────────────────────────────────────────────────────────┐
-│ 1. dotnet build       自动编译 .csproj，定位输出 DLL        │
-│ 2. Mono.Cecil 读取    解析 DLL 中的类型、方法、IL 指令      │
-│    (Debug: 同时读取 PDB 符号文件获取源码行号映射)            │
-│ 3. IR 构建            IL → 中间表示                         │
-│    Pass 1: 创建类型外壳                                      │
-│    Pass 2: 填充字段、基类、接口                              │
-│    Pass 3: 转换方法体（栈模拟 → 变量赋值）                   │
+│ 1. dotnet build       自动编译 .csproj，定位输出 DLL          │
+│ 2. Mono.Cecil 读取    解析 DLL 中的类型、方法、IL 指令         │
+│    (Debug: 同时读取 PDB 符号文件获取源码行号映射)              │
+│ 3. IR 构建            IL → 中间表示（6 遍）                   │
+│    Pass 1: 创建类型外壳（名称、标志）                          │
+│    Pass 2: 填充字段、基类、接口                               │
+│    Pass 3: 创建方法壳（签名，不含方法体）                      │
 │    Pass 4: 构建 VTable                                       │
-│ 4. C++ 代码生成       IR → .h + .cpp + main.cpp + CMake     │
+│    Pass 5: 构建接口实现映射                                   │
+│    Pass 6: 转换方法体（栈模拟 → 变量赋值，VTable 已就绪）      │
+│ 4. C++ 代码生成       IR → .h + .cpp + main.cpp + CMake      │
 └─────────────────────────────────────────────────────────────┘
 ```
 
@@ -338,7 +340,7 @@ void Program_Main() {
 
 ## C# 功能支持状态
 
-> ✅ 已支持 &nbsp;&nbsp; ⚠️ 部分支持 &nbsp;&nbsp; ❌ 未支持
+> ✅ 已支持 ⚠️ 部分支持 ❌ 未支持
 
 ### 基本类型
 
@@ -352,7 +354,7 @@ void Program_Main() {
 | IntPtr, UIntPtr | ✅ | 映射到 intptr_t, uintptr_t |
 | 类型转换 (全部) | ✅ | Conv_I1/I2/I4/I8/U1/U2/U4/U8/I/U/R4/R8/R_Un（共 13 种） |
 | struct (值类型) | ⚠️ | 结构体定义 + initobj + 装箱/拆箱已支持；无完整拷贝语义 |
-| enum | ⚠️ | 识别 IsEnum 标志，但无 ToString/Parse 等特殊处理 |
+| enum | ✅ | typedef 到底层整数类型 + constexpr 命名常量 + TypeInfo (Enum\|ValueType 标志) |
 | 装箱 / 拆箱 | ✅ | box / unbox / unbox.any → `cil2cpp::box<T>()` / `cil2cpp::unbox<T>()` |
 | Nullable\<T\> | ❌ | 需要泛型支持 |
 | Tuple (ValueTuple) | ❌ | 需要泛型支持 |
@@ -369,16 +371,16 @@ void Program_Main() {
 | 静态方法 | ✅ | |
 | 实例字段 | ✅ | ldfld / stfld |
 | 静态字段 | ✅ | 存储在 `<Type>_statics` 全局结构体中 |
-| 继承（单继承） | ⚠️ | 基类字段拷贝到派生结构体，base 类型追踪 |
-| 虚方法 | ⚠️ | VTable 基础设施已构建，callvirt 已处理 |
+| 继承（单继承） | ✅ | 基类字段拷贝到派生结构体，base 类型追踪，VTable 继承 |
+| 虚方法 / 多态 | ✅ | 完整 VTable 分派：`obj->__type_info->vtable->methods[slot]` 函数指针调用 |
 | 属性 | ⚠️ | C# 编译器生成的 get_/set_ 方法调用可工作，但无属性元数据 |
 | 类型转换 (is / as) | ✅ | isinst → object_as()，castclass → object_cast() |
 | 抽象类/方法 | ⚠️ | 识别 IsAbstract 标志，抽象方法跳过代码生成 |
-| 接口 | ❌ | 识别并记录接口列表，但未生成接口分派代码 |
+| 接口 | ✅ | InterfaceVTable 分派：编译器生成接口方法表，运行时 `type_get_interface_vtable()` 查找 |
 | 泛型 | ❌ | |
-| 运算符重载 | ❌ | |
+| 运算符重载 | ✅ | C# 编译为 `op_Addition` 等静态方法调用，编译器自动识别并标记 |
 | 索引器 | ❌ | |
-| 终结器 / 析构函数 | ❌ | 运行时支持 BoehmGC finalizer 注册，但编译器未检测 `~Destructor()` / `Finalize()` 方法 |
+| 终结器 / 析构函数 | ✅ | 编译器检测 `Finalize()` 方法，生成 finalizer wrapper → TypeInfo.finalizer，BoehmGC 自动注册 |
 
 ### 控制流
 
@@ -425,7 +427,7 @@ void Program_Main() {
 | rethrow | ✅ | `CIL2CPP_RETHROW` |
 | 自动 null 检查 | ✅ | `null_check()` 内联函数 |
 | 栈回溯 | ⚠️ | `capture_stack_trace()` — Windows: DbgHelp, POSIX: backtrace；仅 Debug |
-| using 语句 | ❌ | 需要 IDisposable 接口分派 |
+| using 语句 | ❌ | 接口分派已支持，但需定义 IDisposable 接口 + Dispose() 映射 |
 | 嵌套 try/catch/finally | ⚠️ | 宏基于 setjmp/longjmp，支持嵌套但复杂场景可能有限 |
 
 ### 标准库 (BCL)
@@ -473,7 +475,7 @@ void Program_Main() {
 | 功能 | 状态 | 备注 |
 |------|------|------|
 | BoehmGC | ✅ | 保守扫描 GC（bdwgc），自动管理栈根、全局变量、堆引用 |
-| TypeInfo / VTable | ✅ | 完整类型元数据 |
+| TypeInfo / VTable / InterfaceVTable | ✅ | 完整类型元数据 + VTable 多态分派 + 接口分派 + Finalizer |
 | 对象模型 | ✅ | Object 基类 + __type_info + __sync_block |
 | 字符串 (UTF-16) | ✅ | 不可变，驻留池，FNV-1a 哈希 |
 | 数组（类型化 + 越界检查） | ✅ | `array_get<T>` / `array_set<T>` / `array_get_element_ptr` + 编译器完整 ldelem/stelem/ldelema + 数组初始化器 |
@@ -488,12 +490,12 @@ void Program_Main() {
 基于功能依赖关系的分阶段实现计划。每个阶段产出可用的增量：
 
 ```
-Phase 1 (基础) ✅     Phase 2 (对象模型)       Phase 3 (泛型/委托)
-  数组 (全功能)         接口分派                 泛型
-  try/catch/finally     枚举完整支持              委托 → 事件
-  switch                运算符重载               Lambda/闭包
-  值类型+装箱/拆箱      终结器                   集合类 (List<T>)
-  静态构造函数                                   IEnumerable<T> / foreach
+Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托)
+  数组 (全功能)         VTable 多态分派           泛型
+  try/catch/finally     接口分派                  委托 → 事件
+  switch                枚举完整支持              Lambda/闭包
+  值类型+装箱/拆箱      运算符重载               集合类 (List<T>)
+  静态构造函数          终结器                   IEnumerable<T> / foreach
   System.Math
   类型转换 (全部)
        │                    │                        │
@@ -549,16 +551,17 @@ Phase 1 (基础) ✅     Phase 2 (对象模型)       Phase 3 (泛型/委托)
 | **编译器内部类型过滤** | ✅ | `<PrivateImplementationDetails>` 自动过滤不生成 C++ 代码 |
 | **goto/label 作用域** | ✅ | 自动为 label 间代码生成 `{}` 作用域，避免 C++ goto 跨声明错误 |
 
-### Phase 2：对象模型完善
+### Phase 2：对象模型完善 ✅ 已完成
 
 完成面向对象体系，支持多态和接口。
 
-| 功能 | 说明 |
-|------|------|
-| **接口分派** | 生成接口方法表，实现接口方法调用。IDisposable、IEnumerable、IComparable 等关键接口需要此功能 |
-| **枚举完整支持** | 底层整数类型、ToString、Parse、Flags 特性 |
-| **运算符重载** | 映射到 op_Addition / op_Equality 等方法 |
-| **终结器** | 编译器检测 `Finalize()` 方法并填充 TypeInfo.finalizer 字段（运行时的 BoehmGC finalizer 注册已就绪） |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **VTable 多态分派** | ✅ | IR 构建 6 遍（方法壳 → VTable → 方法体），生成函数指针数组 + VTable 结构体，callvirt 通过 `vtable->methods[slot]` 分派 |
+| **接口分派** | ✅ | InterfaceVTable 结构体 + `type_get_interface_vtable()` 运行时查找（支持基类链回溯），编译器生成接口方法表数据 |
+| **枚举完整支持** | ✅ | typedef 到底层整数类型 + constexpr 命名常量 + Enum\|ValueType TypeInfo 标志 |
+| **运算符重载** | ✅ | C# `op_Addition` 等静态方法调用自动识别，编译器标记 IsOperator + OperatorName |
+| **终结器** | ✅ | 编译器检测 `Finalize()` 方法，生成 finalizer wrapper 函数 → TypeInfo.finalizer，BoehmGC `GC_register_finalizer_no_order()` 自动注册 |
 
 ### Phase 3：泛型与委托
 
@@ -666,7 +669,7 @@ runtime/CMakeLists.txt
 | 数组分配 | ✅ | `alloc_array()` → `GC_MALLOC()` + 正确设置 `__type_info` 和 `element_type` |
 | 自动根扫描 | ✅ | BoehmGC 保守扫描，无需 shadow stack / add_root |
 | Finalizer 注册 | ✅ | `GC_register_finalizer_no_order()`，运行时已就绪 |
-| Finalizer 检测 | ❌ | 编译器未检测 `~Destructor()` / `Finalize()` 方法，TypeInfo.finalizer 始终为 nullptr |
+| Finalizer 检测 | ✅ | 编译器检测 `Finalize()` 方法，生成 wrapper → TypeInfo.finalizer，`GC_register_finalizer_no_order()` 自动注册 |
 | GC 统计 | ✅ | `GC_get_heap_size()` / `GC_get_total_bytes()` / `GC_get_gc_no()` |
 | Write barrier | ✅ | 空操作（BoehmGC 不需要） |
 | 增量/并发回收 | ❌ | BoehmGC 支持但未启用 |
@@ -689,16 +692,20 @@ dotnet test compiler/CIL2CPP.Tests
 dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 ```
 
-| 模块 | 测试数 | 覆盖率 |
-|------|--------|--------|
-| CppNameMapper | 17 | 100% |
-| BuildConfiguration | 10 | 100% |
-| IRModule | 8 | 100% |
-| IRMethod / IRType | 7 | 100% |
-| IR Instructions (全部) | 27 | 100% |
-| CppCodeGenerator | 20 | 81.1% |
-| 其他 | 77 | |
-| **合计** | **166** | **33.1% 行覆盖率** |
+| 模块 | 测试数 |
+|------|--------|
+| CppNameMapper | 89 |
+| BuildConfiguration | 15 |
+| IRModule | 14 |
+| IRMethod / IRType | 7 |
+| IR Instructions (全部) | 45 |
+| ILInstructionCategory | 159 |
+| CppCodeGenerator | 42 |
+| IRBuilder | 75 |
+| TypeDefinitionInfo | 62 |
+| AssemblyReader | 12 |
+| SequencePointInfo | 5 |
+| **合计** | **525** |
 
 ### 运行时单元测试 (C++ / Google Test)
 
@@ -765,7 +772,7 @@ python tools/dev.py build                  # 编译 compiler + runtime
 python tools/dev.py build --compiler       # 仅编译 compiler
 python tools/dev.py build --runtime        # 仅编译 runtime
 python tools/dev.py test --all             # 运行全部测试（编译器 + 运行时 + 集成）
-python tools/dev.py test --compiler        # 仅编译器测试 (166 xUnit)
+python tools/dev.py test --compiler        # 仅编译器测试 (525 xUnit)
 python tools/dev.py test --runtime         # 仅运行时测试 (109 GTest)
 python tools/dev.py test --coverage        # 测试 + 覆盖率 HTML 报告
 python tools/dev.py install                # 安装 runtime (Debug + Release)

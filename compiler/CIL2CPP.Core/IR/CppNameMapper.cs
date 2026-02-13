@@ -5,6 +5,12 @@ namespace CIL2CPP.Core.IR;
 /// </summary>
 public static class CppNameMapper
 {
+    // User-defined value types (structs and enums) registered during IR build
+    private static readonly HashSet<string> _userValueTypes = new();
+
+    public static void RegisterValueType(string ilTypeName) => _userValueTypes.Add(ilTypeName);
+    public static void ClearValueTypes() => _userValueTypes.Clear();
+
     private static readonly Dictionary<string, string> PrimitiveTypeMap = new()
     {
         ["System.Void"] = "void",
@@ -45,7 +51,7 @@ public static class CppNameMapper
             "System.Int16" or "System.UInt16" or "System.Int32" or "System.UInt32" or
             "System.Int64" or "System.UInt64" or "System.Single" or "System.Double" or
             "System.Char" or "System.IntPtr" or "System.UIntPtr" => true,
-            _ => false
+            _ => _userValueTypes.Contains(ilTypeName)
         };
     }
 
@@ -182,7 +188,7 @@ public static class CppNameMapper
             "float" => "0.0f",
             "double" => "0.0",
             "char16_t" => "u'\\0'",
-            _ => "nullptr"
+            _ => _userValueTypes.Contains(typeName) ? "{}" : "nullptr"
         };
     }
 }

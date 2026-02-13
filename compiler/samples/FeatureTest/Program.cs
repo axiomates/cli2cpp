@@ -60,6 +60,67 @@ public struct Point
     public int Y;
 }
 
+// Interface for testing interface dispatch
+public interface ISpeak
+{
+    string GetSound();
+}
+
+// Derived class implementing an interface
+public class Duck : Animal, ISpeak
+{
+    public Duck(string name) : base(name) { }
+
+    public override string Speak()
+    {
+        return "Quack!";
+    }
+
+    public string GetSound()
+    {
+        return "Quack quack!";
+    }
+}
+
+// Class with finalizer
+public class Resource
+{
+    private string _name;
+
+    public Resource(string name)
+    {
+        _name = name;
+    }
+
+    ~Resource()
+    {
+        // Destructor / Finalize
+    }
+
+    public string GetName()
+    {
+        return _name;
+    }
+}
+
+// Value type with operator overloading
+public struct Vector2
+{
+    public float X;
+    public float Y;
+
+    public Vector2(float x, float y)
+    {
+        X = x;
+        Y = y;
+    }
+
+    public static Vector2 operator +(Vector2 a, Vector2 b)
+    {
+        return new Vector2(a.X + b.X, a.Y + b.Y);
+    }
+}
+
 // Class with readonly field (IsInitOnly)
 public class Config
 {
@@ -103,6 +164,9 @@ public class Program
         TestMoreMathOps();
         TestConstants();
         TestReadonlyField();
+        TestInterfaceDispatch();
+        TestFinalizer();
+        TestOperator();
     }
 
     static void TestArithmetic()
@@ -395,5 +459,26 @@ public class Program
         var cfg = new Config("test");
         Console.WriteLine(cfg.MaxRetries);
         Console.WriteLine(cfg.Name);
+    }
+
+    static void TestInterfaceDispatch()
+    {
+        ISpeak speaker = new Duck("Donald");
+        Console.WriteLine(speaker.GetSound());
+    }
+
+    static void TestFinalizer()
+    {
+        var resource = new Resource("test");
+        Console.WriteLine(resource.GetName());
+    }
+
+    static void TestOperator()
+    {
+        var v1 = new Vector2(1.0f, 2.0f);
+        var v2 = new Vector2(3.0f, 4.0f);
+        var v3 = v1 + v2;
+        Console.WriteLine(v3.X);
+        Console.WriteLine(v3.Y);
     }
 }

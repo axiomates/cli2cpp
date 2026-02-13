@@ -23,6 +23,11 @@ public class TypeDefinitionInfo
     public bool IsPublic => _type.IsPublic;
     public bool IsNested => _type.IsNested;
 
+    /// <summary>For enum types, the underlying integer type name.</summary>
+    public string? EnumUnderlyingType => _type.IsEnum
+        ? _type.Fields.FirstOrDefault(f => f.Name == "value__")?.FieldType.FullName
+        : null;
+
     public bool HasGenericParameters => _type.HasGenericParameters;
     public IReadOnlyList<string> GenericParameterNames =>
         _type.GenericParameters.Select(p => p.Name).ToList();
@@ -67,6 +72,7 @@ public class FieldInfo
     public bool IsPublic => _field.IsPublic;
     public bool IsPrivate => _field.IsPrivate;
     public bool IsInitOnly => _field.IsInitOnly;
+    public object? ConstantValue => _field.HasConstant ? _field.Constant : null;
 
     public FieldInfo(FieldDefinition field)
     {

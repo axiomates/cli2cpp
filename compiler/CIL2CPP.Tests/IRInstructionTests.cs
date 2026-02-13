@@ -69,13 +69,16 @@ public class IRInstructionTests
     {
         var instr = new IRCall
         {
-            FunctionName = "Method",
+            FunctionName = "Animal_Speak",
             IsVirtual = true,
-            VTableAccess = "vtable->Method",
+            VTableSlot = 0,
+            VTableReturnType = "cil2cpp::String*",
+            VTableParamTypes = new List<string> { "Animal*" },
             ResultVar = "__t0"
         };
         instr.Arguments.Add("__this");
-        Assert.Equal("__t0 = vtable->Method(__this);", instr.ToCpp());
+        Assert.Equal("__t0 = ((cil2cpp::String*(*)(Animal*))(((" +
+            "cil2cpp::Object*)__this)->__type_info->vtable->methods[0]))(__this);", instr.ToCpp());
     }
 
     [Fact]
@@ -439,5 +442,68 @@ public class IRInstructionTests
     {
         var instr = new IRRethrow();
         Assert.Equal("CIL2CPP_RETHROW;", instr.ToCpp());
+    }
+
+    // ===== Phase 2: Interface dispatch ToCpp =====
+
+    [Fact]
+    public void IRCall_InterfaceDispatch_ToCpp()
+    {
+        var instr = new IRCall
+        {
+            FunctionName = "ISpeak_GetSound",
+            IsVirtual = true,
+            IsInterfaceCall = true,
+            InterfaceTypeCppName = "ISpeak",
+            VTableSlot = 0,
+            VTableReturnType = "cil2cpp::String*",
+            VTableParamTypes = new List<string> { "void*" },
+            ResultVar = "__t0"
+        };
+        instr.Arguments.Add("__this");
+        var code = instr.ToCpp();
+        Assert.Contains("type_get_interface_vtable_checked", code);
+        Assert.Contains("methods[0]", code);
+        Assert.Contains("ISpeak_TypeInfo", code);
+    }
+
+    [Fact]
+    public void IRCall_VirtualDispatch_NoResult_ToCpp()
+    {
+        var instr = new IRCall
+        {
+            FunctionName = "MyClass_DoStuff",
+            IsVirtual = true,
+            VTableSlot = 1,
+            VTableReturnType = "void",
+            VTableParamTypes = new List<string> { "MyClass*" },
+            ResultVar = null
+        };
+        instr.Arguments.Add("__this");
+        var code = instr.ToCpp();
+        Assert.DoesNotContain("= (", code);
+        Assert.Contains("methods[1]", code);
+    }
+
+    [Fact]
+    public void IRCall_InterfaceDispatch_MultipleParams_ToCpp()
+    {
+        var instr = new IRCall
+        {
+            FunctionName = "ICalc_Add",
+            IsVirtual = true,
+            IsInterfaceCall = true,
+            InterfaceTypeCppName = "ICalc",
+            VTableSlot = 0,
+            VTableReturnType = "int32_t",
+            VTableParamTypes = new List<string> { "void*", "int32_t", "int32_t" },
+            ResultVar = "__t0"
+        };
+        instr.Arguments.Add("obj");
+        instr.Arguments.Add("1");
+        instr.Arguments.Add("2");
+        var code = instr.ToCpp();
+        Assert.Contains("void*, int32_t, int32_t", code);
+        Assert.Contains("obj, 1, 2", code);
     }
 }

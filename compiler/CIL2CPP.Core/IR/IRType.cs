@@ -35,6 +35,9 @@ public class IRType
     /// <summary>Virtual method table</summary>
     public List<IRVTableEntry> VTable { get; } = new();
 
+    /// <summary>Interface implementation vtables (for concrete types)</summary>
+    public List<IRInterfaceImpl> InterfaceImpls { get; } = new();
+
     /// <summary>Calculated object size in bytes</summary>
     public int InstanceSize { get; set; }
 
@@ -45,6 +48,12 @@ public class IRType
     public bool IsSealed { get; set; }
     public bool IsEnum { get; set; }
     public bool HasCctor { get; set; }
+
+    /// <summary>Underlying integer type for enums (e.g., "System.Int32")</summary>
+    public string? EnumUnderlyingType { get; set; }
+
+    /// <summary>The Finalize() method, if this type has one.</summary>
+    public IRMethod? Finalizer { get; set; }
 
     /// <summary>
     /// Get the C++ type name for use in declarations.
@@ -71,6 +80,7 @@ public class IRField
     public bool IsPublic { get; set; }
     public int Offset { get; set; }
     public IRType? DeclaringType { get; set; }
+    public object? ConstantValue { get; set; }
 }
 
 /// <summary>
@@ -82,4 +92,13 @@ public class IRVTableEntry
     public string MethodName { get; set; } = "";
     public IRMethod? Method { get; set; }
     public IRType? DeclaringType { get; set; }
+}
+
+/// <summary>
+/// Maps an interface to the implementing methods for a concrete type.
+/// </summary>
+public class IRInterfaceImpl
+{
+    public IRType Interface { get; set; } = null!;
+    public List<IRMethod?> MethodImpls { get; } = new();
 }
