@@ -909,6 +909,229 @@ public class IRBuilderTests
         Assert.Equal("op_Addition", opMethod!.OperatorName);
     }
 
+    // ===== Phase 3: Properties =====
+
+    [Fact]
+    public void Build_FeatureTest_PersonType_Exists()
+    {
+        var module = BuildFeatureTest();
+        Assert.NotNull(module.FindType("Person"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Person_HasBackingFields()
+    {
+        var module = BuildFeatureTest();
+        var person = module.FindType("Person")!;
+        // Auto-properties generate backing fields like <Name>k__BackingField
+        // After mangling, they become valid C++ identifiers without < or >
+        var fieldCppNames = person.Fields.Select(f => f.CppName).ToList();
+        foreach (var name in fieldCppNames)
+        {
+            Assert.DoesNotContain("<", name);
+            Assert.DoesNotContain(">", name);
+        }
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Person_HasGetSetMethods()
+    {
+        var module = BuildFeatureTest();
+        var person = module.FindType("Person")!;
+        var methodNames = person.Methods.Select(m => m.Name).ToList();
+        Assert.Contains("get_Name", methodNames);
+        Assert.Contains("set_Name", methodNames);
+        Assert.Contains("get_Age", methodNames);
+        Assert.Contains("set_Age", methodNames);
+        Assert.Contains("get_ManualProp", methodNames);
+        Assert.Contains("set_ManualProp", methodNames);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestProperties_HasFieldAccess()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestProperties");
+        var calls = instrs.OfType<IRCall>().ToList();
+        // TestProperties calls get_Name, get_Age, set_ManualProp, get_ManualProp
+        Assert.True(calls.Count > 0);
+    }
+
+    // ===== Phase 3: foreach array =====
+
+    [Fact]
+    public void Build_FeatureTest_TestForeachArray_HasArrayAccess()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestForeachArray");
+        Assert.Contains(instrs, i => i is IRArrayAccess);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestForeachArray_HasBranching()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestForeachArray");
+        Assert.Contains(instrs, i => i is IRConditionalBranch);
+    }
+
+    // ===== Phase 3: using/Dispose =====
+
+    [Fact]
+    public void Build_FeatureTest_DisposableResource_Exists()
+    {
+        var module = BuildFeatureTest();
+        Assert.NotNull(module.FindType("DisposableResource"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_DisposableResource_HasDispose()
+    {
+        var module = BuildFeatureTest();
+        var type = module.FindType("DisposableResource")!;
+        var methodNames = type.Methods.Select(m => m.Name).ToList();
+        Assert.Contains("Dispose", methodNames);
+    }
+
+    // ===== Phase 3: Delegate type detection =====
+
+    [Fact]
+    public void Build_FeatureTest_MathOp_IsDelegate()
+    {
+        var module = BuildFeatureTest();
+        var mathOp = module.FindType("MathOp");
+        Assert.NotNull(mathOp);
+        Assert.True(mathOp!.IsDelegate);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_NonDelegate_NotMarkedAsDelegate()
+    {
+        var module = BuildFeatureTest();
+        var animal = module.FindType("Animal")!;
+        Assert.False(animal.IsDelegate);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestDelegate_HasLdftn()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestDelegate");
+        Assert.Contains(instrs, i => i is IRLoadFunctionPointer);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestDelegate_HasDelegateCreate()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestDelegate");
+        Assert.Contains(instrs, i => i is IRDelegateCreate);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestDelegate_HasDelegateInvoke()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestDelegate");
+        Assert.Contains(instrs, i => i is IRDelegateInvoke);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestDelegate_DelegateInvokeHasParams()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestDelegate");
+        var invoke = instrs.OfType<IRDelegateInvoke>().First();
+        Assert.Equal(2, invoke.ParamTypes.Count);
+        Assert.Equal("int32_t", invoke.ReturnTypeCpp);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestDelegate_NoUnsupportedWarnings()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestDelegate");
+        var warnings = instrs.OfType<IRComment>().Where(c => c.Text.Contains("WARNING")).ToList();
+        Assert.Empty(warnings);
+    }
+
+    // ===== Phase 3: Generics =====
+
+    [Fact]
+    public void Build_FeatureTest_OpenGenericType_Skipped()
+    {
+        var module = BuildFeatureTest();
+        // Open generic Wrapper`1 should NOT appear as a type (it's a template)
+        var openType = module.Types.FirstOrDefault(t => t.ILFullName == "Wrapper`1");
+        Assert.Null(openType);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_WrapperInt_Exists()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.FirstOrDefault(t => t.IsGenericInstance && t.CppName.Contains("Wrapper"));
+        Assert.NotNull(type);
+        Assert.True(type!.IsGenericInstance);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericInstance_HasFields()
+    {
+        var module = BuildFeatureTest();
+        var wrapperTypes = module.Types.Where(t => t.IsGenericInstance && t.CppName.Contains("Wrapper")).ToList();
+        Assert.True(wrapperTypes.Count >= 1);
+        // Each Wrapper<T> should have a _value field
+        foreach (var type in wrapperTypes)
+        {
+            Assert.True(type.Fields.Count > 0 || type.StaticFields.Count > 0,
+                $"Generic instance {type.CppName} should have fields");
+        }
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericInstance_HasMethods()
+    {
+        var module = BuildFeatureTest();
+        var wrapperTypes = module.Types.Where(t => t.IsGenericInstance && t.CppName.Contains("Wrapper")).ToList();
+        Assert.True(wrapperTypes.Count >= 1);
+        foreach (var type in wrapperTypes)
+        {
+            var methodNames = type.Methods.Select(m => m.Name).ToList();
+            Assert.Contains("GetValue", methodNames);
+            Assert.Contains("SetValue", methodNames);
+            Assert.Contains(".ctor", methodNames);
+        }
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericInstance_FieldTypeSubstituted()
+    {
+        var module = BuildFeatureTest();
+        // Find a Wrapper instance that uses int (System.Int32)
+        var wrapperInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance && t.GenericArguments.Contains("System.Int32"));
+        Assert.NotNull(wrapperInt);
+        // _value field should have type int32_t, not "T"
+        var valueField = wrapperInt!.Fields.FirstOrDefault(f => f.Name == "_value");
+        Assert.NotNull(valueField);
+        Assert.DoesNotContain("T", valueField!.FieldTypeName);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericInstance_CppNameMangled()
+    {
+        var module = BuildFeatureTest();
+        var wrapperTypes = module.Types.Where(t => t.IsGenericInstance && t.CppName.Contains("Wrapper")).ToList();
+        foreach (var type in wrapperTypes)
+        {
+            // CppName should be a valid C++ identifier (no angle brackets, backticks, etc.)
+            Assert.DoesNotContain("<", type.CppName);
+            Assert.DoesNotContain(">", type.CppName);
+            Assert.DoesNotContain("`", type.CppName);
+        }
+    }
+
     // ===== Phase 2: User value type registration =====
 
     [Fact]

@@ -506,4 +506,102 @@ public class IRInstructionTests
         Assert.Contains("void*, int32_t, int32_t", code);
         Assert.Contains("obj, 1, 2", code);
     }
+
+    // ===== Phase 3: Delegate instructions ToCpp =====
+
+    [Fact]
+    public void IRLoadFunctionPointer_Static_ToCpp()
+    {
+        var instr = new IRLoadFunctionPointer
+        {
+            MethodCppName = "Program_StaticAdd",
+            ResultVar = "__t0"
+        };
+        Assert.Equal("__t0 = (void*)Program_StaticAdd;", instr.ToCpp());
+    }
+
+    [Fact]
+    public void IRLoadFunctionPointer_Virtual_ToCpp()
+    {
+        var instr = new IRLoadFunctionPointer
+        {
+            MethodCppName = "Animal_Speak",
+            ResultVar = "__t0",
+            IsVirtual = true,
+            ObjectExpr = "obj",
+            VTableSlot = 3
+        };
+        var code = instr.ToCpp();
+        Assert.Contains("((cil2cpp::Object*)obj)->__type_info->vtable->methods[3]", code);
+        Assert.StartsWith("__t0 = ", code);
+    }
+
+    [Fact]
+    public void IRLoadFunctionPointer_VirtualNoSlot_FallsBackToStatic()
+    {
+        var instr = new IRLoadFunctionPointer
+        {
+            MethodCppName = "SomeMethod",
+            ResultVar = "__t0",
+            IsVirtual = true,
+            ObjectExpr = null,
+            VTableSlot = -1
+        };
+        Assert.Equal("__t0 = (void*)SomeMethod;", instr.ToCpp());
+    }
+
+    [Fact]
+    public void IRDelegateCreate_ToCpp()
+    {
+        var instr = new IRDelegateCreate
+        {
+            DelegateTypeCppName = "MathOp",
+            TargetExpr = "nullptr",
+            FunctionPtrExpr = "__fptr",
+            ResultVar = "__t0"
+        };
+        var code = instr.ToCpp();
+        Assert.Equal("__t0 = cil2cpp::delegate_create(&MathOp_TypeInfo, (cil2cpp::Object*)nullptr, __fptr);", code);
+    }
+
+    [Fact]
+    public void IRDelegateInvoke_Static_WithResult_ToCpp()
+    {
+        var instr = new IRDelegateInvoke
+        {
+            DelegateExpr = "__del",
+            ReturnTypeCpp = "int32_t",
+            ResultVar = "__t0"
+        };
+        instr.ParamTypes.Add("int32_t");
+        instr.ParamTypes.Add("int32_t");
+        instr.Arguments.Add("a");
+        instr.Arguments.Add("b");
+        var code = instr.ToCpp();
+        // Should have if/else for target check
+        Assert.Contains("if (", code);
+        Assert.Contains("->target", code);
+        Assert.Contains("->method_ptr", code);
+        // Static call should have just the param types
+        Assert.Contains("int32_t(*)(int32_t, int32_t)", code);
+        // Instance call should have Object* + param types
+        Assert.Contains("int32_t(*)(cil2cpp::Object*, int32_t, int32_t)", code);
+        // Result assignment
+        Assert.Contains("__t0 = ", code);
+    }
+
+    [Fact]
+    public void IRDelegateInvoke_Void_NoResult_ToCpp()
+    {
+        var instr = new IRDelegateInvoke
+        {
+            DelegateExpr = "__del",
+            ReturnTypeCpp = "void"
+        };
+        var code = instr.ToCpp();
+        Assert.Contains("if (", code);
+        Assert.DoesNotContain("__t0", code);
+        // Void with no params
+        Assert.Contains("void(*)()", code);
+    }
 }

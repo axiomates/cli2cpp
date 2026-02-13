@@ -48,6 +48,11 @@ public class IRType
     public bool IsSealed { get; set; }
     public bool IsEnum { get; set; }
     public bool HasCctor { get; set; }
+    public bool IsDelegate { get; set; }
+    public bool IsGenericInstance { get; set; }
+
+    /// <summary>Concrete type argument names for generic instances (e.g., ["System.Int32"])</summary>
+    public List<string> GenericArguments { get; set; } = new();
 
     /// <summary>Underlying integer type for enums (e.g., "System.Int32")</summary>
     public string? EnumUnderlyingType { get; set; }

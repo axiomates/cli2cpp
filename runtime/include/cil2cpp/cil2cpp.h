@@ -13,6 +13,7 @@
 #include "exception.h"
 #include "type_info.h"
 #include "boxing.h"
+#include "delegate.h"
 
 // BCL types
 #include "bcl/System.Object.h"

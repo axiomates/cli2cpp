@@ -128,6 +128,17 @@ public static class CppNameMapper
     }
 
     /// <summary>
+    /// Mangle a generic instance type name into a valid C++ identifier.
+    /// E.g., ("Wrapper`1", ["System.Int32"]) → "Wrapper_1_System_Int32"
+    /// </summary>
+    public static string MangleGenericInstanceTypeName(string openTypeName, IReadOnlyList<string> typeArgs)
+    {
+        var baseName = MangleTypeName(openTypeName);
+        var argParts = string.Join("_", typeArgs.Select(MangleTypeName));
+        return $"{baseName}_{argParts}";
+    }
+
+    /// <summary>
     /// Whether a type is a compiler-generated implementation detail (e.g. &lt;PrivateImplementationDetails&gt;).
     /// These should be filtered from C++ code generation.
     /// </summary>
@@ -158,6 +169,9 @@ public static class CppNameMapper
         // Remove leading underscore common in C# private fields
         var name = fieldName.TrimStart('_');
         if (name.Length == 0) name = fieldName;
+
+        // Handle compiler-generated backing field names like <Name>k__BackingField
+        name = name.Replace("<", "_").Replace(">", "_");
 
         // Prefix with f_ to avoid C++ keyword conflicts
         return $"f_{name}";

@@ -70,11 +70,11 @@ public class CppCodeGenerator
             .Where(t => !CppNameMapper.IsCompilerGeneratedType(t.ILFullName))
             .ToList();
 
-        // Forward declarations (skip interfaces and enums — no struct defs)
+        // Forward declarations (skip interfaces, enums, and delegates — no struct defs)
         sb.AppendLine("// ===== Forward Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsEnum) continue;
+            if (type.IsInterface || type.IsEnum || type.IsDelegate) continue;
             sb.AppendLine($"struct {type.CppName};");
         }
         sb.AppendLine();
@@ -102,13 +102,20 @@ public class CppCodeGenerator
                 GenerateEnumDefinition(sb, type);
                 continue;
             }
+            if (type.IsDelegate)
+            {
+                // Delegates are aliases for cil2cpp::Delegate
+                sb.AppendLine($"using {type.CppName} = cil2cpp::Delegate;");
+                sb.AppendLine();
+                continue;
+            }
             GenerateStructDefinition(sb, type);
         }
 
         // Static field storage declarations
         foreach (var type in userTypes)
         {
-            if (type.IsEnum) continue;
+            if (type.IsEnum || type.IsDelegate) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"// Static fields for {type.ILFullName}");
@@ -128,7 +135,7 @@ public class CppCodeGenerator
         sb.AppendLine("// ===== Method Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface) continue;
+            if (type.IsInterface || type.IsDelegate) continue;
 
             foreach (var method in type.Methods)
             {
@@ -283,13 +290,13 @@ public class CppCodeGenerator
         // Static field storage
         foreach (var type in userTypes)
         {
-            if (type.IsEnum) continue;
+            if (type.IsEnum || type.IsDelegate) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"{type.CppName}_Statics {type.CppName}_statics = {{}};");
             }
         }
-        if (userTypes.Any(t => !t.IsEnum && t.StaticFields.Count > 0))
+        if (userTypes.Any(t => !t.IsEnum && !t.IsDelegate && t.StaticFields.Count > 0))
         {
             sb.AppendLine();
         }
@@ -365,7 +372,7 @@ public class CppCodeGenerator
         sb.AppendLine("// ===== Method Implementations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface) continue;
+            if (type.IsInterface || type.IsDelegate) continue;
 
             foreach (var method in type.Methods)
             {
@@ -388,8 +395,8 @@ public class CppCodeGenerator
         // Interfaces array
         var interfacesExpr = type.Interfaces.Count > 0 ? $"{type.CppName}_interfaces" : "nullptr";
 
-        // VTable
-        var vtableExpr = (!type.IsInterface && type.VTable.Count > 0) ? $"&{type.CppName}_VTable" : "nullptr";
+        // VTable (delegates have no vtable)
+        var vtableExpr = (!type.IsInterface && !type.IsDelegate && type.VTable.Count > 0) ? $"&{type.CppName}_VTable" : "nullptr";
 
         // Interface vtables
         var ifaceVtablesExpr = type.InterfaceImpls.Count > 0 ? $"{type.CppName}_interface_vtables" : "nullptr";
@@ -694,7 +701,7 @@ public class CppCodeGenerator
         bool any = false;
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.VTable.Count == 0) continue;
+            if (type.IsInterface || type.IsDelegate || type.VTable.Count == 0) continue;
             if (!any)
             {
                 sb.AppendLine("// ===== VTable Data =====");

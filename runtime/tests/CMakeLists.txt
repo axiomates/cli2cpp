@@ -29,6 +29,7 @@ add_executable(cil2cpp_tests
     test_type_system.cpp
     test_object.cpp
     test_exception.cpp
+    test_delegate.cpp
 )
 
 target_link_libraries(cil2cpp_tests

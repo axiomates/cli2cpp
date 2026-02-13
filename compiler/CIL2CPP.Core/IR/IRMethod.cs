@@ -429,3 +429,63 @@ public class IRRawCpp : IRInstruction
     public string Code { get; set; } = "";
     public override string ToCpp() => Code;
 }
+
+// ============ Delegate Instructions ============
+
+public class IRLoadFunctionPointer : IRInstruction
+{
+    public string MethodCppName { get; set; } = "";
+    public string ResultVar { get; set; } = "";
+    public bool IsVirtual { get; set; }
+    public string? ObjectExpr { get; set; }
+    public int VTableSlot { get; set; } = -1;
+
+    public override string ToCpp()
+    {
+        if (IsVirtual && VTableSlot >= 0 && ObjectExpr != null)
+            return $"{ResultVar} = ((cil2cpp::Object*){ObjectExpr})->__type_info->vtable->methods[{VTableSlot}];";
+        return $"{ResultVar} = (void*){MethodCppName};";
+    }
+}
+
+public class IRDelegateCreate : IRInstruction
+{
+    public string DelegateTypeCppName { get; set; } = "";
+    public string TargetExpr { get; set; } = "";
+    public string FunctionPtrExpr { get; set; } = "";
+    public string ResultVar { get; set; } = "";
+
+    public override string ToCpp() =>
+        $"{ResultVar} = cil2cpp::delegate_create(&{DelegateTypeCppName}_TypeInfo, (cil2cpp::Object*){TargetExpr}, {FunctionPtrExpr});";
+}
+
+public class IRDelegateInvoke : IRInstruction
+{
+    public string DelegateExpr { get; set; } = "";
+    public string ReturnTypeCpp { get; set; } = "void";
+    public List<string> ParamTypes { get; } = new();
+    public List<string> Arguments { get; } = new();
+    public string? ResultVar { get; set; }
+
+    public override string ToCpp()
+    {
+        var del = $"((cil2cpp::Delegate*){DelegateExpr})";
+
+        // Instance call: target is first arg, then user args
+        var instanceParamTypes = new List<string> { "cil2cpp::Object*" };
+        instanceParamTypes.AddRange(ParamTypes);
+        var instanceFnPtr = $"{ReturnTypeCpp}(*)({string.Join(", ", instanceParamTypes)})";
+        var instanceArgs = new List<string> { $"{del}->target" };
+        instanceArgs.AddRange(Arguments);
+        var instanceCall = $"(({instanceFnPtr})({del}->method_ptr))({string.Join(", ", instanceArgs)})";
+
+        // Static call: no target arg
+        var staticFnPtr = ParamTypes.Count > 0
+            ? $"{ReturnTypeCpp}(*)({string.Join(", ", ParamTypes)})"
+            : $"{ReturnTypeCpp}(*)()";
+        var staticCall = $"(({staticFnPtr})({del}->method_ptr))({string.Join(", ", Arguments)})";
+
+        var assign = ResultVar != null ? $"{ResultVar} = " : "";
+        return $"if ({del}->target) {{ {assign}{instanceCall}; }} else {{ {assign}{staticCall}; }}";
+    }
+}

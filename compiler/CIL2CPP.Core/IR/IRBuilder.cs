@@ -2,6 +2,7 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using CIL2CPP.Core.IL;
 using CIL2CPP.Core;
+using System.Globalization;
 
 namespace CIL2CPP.Core.IR;
 
@@ -27,6 +28,16 @@ public class IRBuilder
     private readonly BuildConfiguration _config;
     private readonly Dictionary<string, IRType> _typeCache = new();
 
+    // Generic instantiation tracking
+    private readonly Dictionary<string, GenericInstantiationInfo> _genericInstantiations = new();
+
+    private record GenericInstantiationInfo(
+        string OpenTypeName,
+        List<string> TypeArguments,
+        string MangledName,
+        TypeDefinition? CecilOpenType
+    );
+
     public IRBuilder(AssemblyReader reader, BuildConfiguration? config = null)
     {
         _reader = reader;
@@ -41,17 +52,27 @@ public class IRBuilder
     {
         CppNameMapper.ClearValueTypes();
 
+        // Pass 0: Scan for generic instantiations in all method bodies
+        ScanGenericInstantiations();
+
         // Pass 1: Create all type shells (no fields/methods yet)
+        // Skip open generic types — they are templates, not concrete types
         foreach (var typeDef in _reader.GetAllTypes())
         {
+            if (typeDef.HasGenericParameters)
+                continue;
             var irType = CreateTypeShell(typeDef);
             _module.Types.Add(irType);
             _typeCache[typeDef.FullName] = irType;
         }
 
+        // Pass 1.5: Create specialized types for each generic instantiation
+        CreateGenericSpecializations();
+
         // Pass 2: Fill in fields, base types, interfaces
         foreach (var typeDef in _reader.GetAllTypes())
         {
+            if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType))
             {
                 PopulateTypeDetails(typeDef, irType);
@@ -61,6 +82,7 @@ public class IRBuilder
         // Pass 2.5: Flag types with static constructors (before method conversion)
         foreach (var typeDef in _reader.GetAllTypes())
         {
+            if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType2))
             {
                 irType2.HasCctor = typeDef.Methods.Any(m => m.IsConstructor && m.IsStatic);
@@ -71,6 +93,7 @@ public class IRBuilder
         var methodBodies = new List<(IL.MethodInfo MethodDef, IRMethod IRMethod)>();
         foreach (var typeDef in _reader.GetAllTypes())
         {
+            if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType))
             {
                 foreach (var methodDef in typeDef.Methods)
@@ -118,6 +141,342 @@ public class IRBuilder
         return _module;
     }
 
+    /// <summary>
+    /// Pass 0: Scan all method bodies for GenericInstanceType references.
+    /// Collects unique generic instantiations (e.g., Wrapper`1&lt;System.Int32&gt;).
+    /// </summary>
+    private void ScanGenericInstantiations()
+    {
+        foreach (var typeDef in _reader.GetAllTypes())
+        {
+            foreach (var methodDef in typeDef.Methods)
+            {
+                if (!methodDef.HasBody) continue;
+                var cecilMethod = methodDef.GetCecilMethod();
+                if (!cecilMethod.HasBody) continue;
+
+                // Scan local variables
+                foreach (var local in cecilMethod.Body.Variables)
+                {
+                    CollectGenericType(local.VariableType);
+                }
+
+                // Scan instructions
+                foreach (var instr in cecilMethod.Body.Instructions)
+                {
+                    switch (instr.Operand)
+                    {
+                        case MethodReference methodRef:
+                            CollectGenericType(methodRef.DeclaringType);
+                            if (methodRef.ReturnType is GenericInstanceType)
+                                CollectGenericType(methodRef.ReturnType);
+                            foreach (var p in methodRef.Parameters)
+                                CollectGenericType(p.ParameterType);
+                            break;
+                        case FieldReference fieldRef:
+                            CollectGenericType(fieldRef.DeclaringType);
+                            CollectGenericType(fieldRef.FieldType);
+                            break;
+                        case TypeReference typeRef:
+                            CollectGenericType(typeRef);
+                            break;
+                    }
+                }
+            }
+        }
+    }
+
+    private void CollectGenericType(TypeReference typeRef)
+    {
+        if (typeRef is not GenericInstanceType git) return;
+
+        // Skip if any type argument is still a generic parameter (unresolved)
+        if (git.GenericArguments.Any(a => a is GenericParameter))
+            return;
+
+        var openTypeName = git.ElementType.FullName;
+        var typeArgs = git.GenericArguments.Select(a => a.FullName).ToList();
+        var key = $"{openTypeName}<{string.Join(",", typeArgs)}>";
+
+        if (_genericInstantiations.ContainsKey(key)) return;
+
+        var mangledName = CppNameMapper.MangleGenericInstanceTypeName(openTypeName, typeArgs);
+        var cecilOpenType = git.ElementType.Resolve();
+
+        _genericInstantiations[key] = new GenericInstantiationInfo(
+            openTypeName, typeArgs, mangledName, cecilOpenType);
+    }
+
+    /// <summary>
+    /// Create specialized IRTypes for each generic instantiation found in Pass 0.
+    /// </summary>
+    private void CreateGenericSpecializations()
+    {
+        foreach (var (key, info) in _genericInstantiations)
+        {
+            if (info.CecilOpenType == null) continue;
+
+            var openType = info.CecilOpenType;
+
+            // Build type parameter map: { "T" → "System.Int32", ... }
+            var typeParamMap = new Dictionary<string, string>();
+            for (int i = 0; i < openType.GenericParameters.Count && i < info.TypeArguments.Count; i++)
+            {
+                typeParamMap[openType.GenericParameters[i].Name] = info.TypeArguments[i];
+            }
+
+            var irType = new IRType
+            {
+                ILFullName = key,
+                CppName = info.MangledName,
+                Name = info.MangledName,
+                Namespace = openType.Namespace,
+                IsValueType = openType.IsValueType,
+                IsInterface = openType.IsInterface,
+                IsAbstract = openType.IsAbstract,
+                IsSealed = openType.IsSealed,
+                IsGenericInstance = true,
+                GenericArguments = info.TypeArguments,
+            };
+
+            // Register value types
+            if (openType.IsValueType)
+                CppNameMapper.RegisterValueType(key);
+
+            // Fields: substitute generic parameters
+            foreach (var fieldDef in openType.Fields)
+            {
+                var fieldTypeName = ResolveGenericTypeName(fieldDef.FieldType, typeParamMap);
+                var irField = new IRField
+                {
+                    Name = fieldDef.Name,
+                    CppName = CppNameMapper.MangleFieldName(fieldDef.Name),
+                    FieldTypeName = fieldTypeName,
+                    IsStatic = fieldDef.IsStatic,
+                    IsPublic = fieldDef.IsPublic,
+                    DeclaringType = irType,
+                };
+                if (fieldDef.IsStatic)
+                    irType.StaticFields.Add(irField);
+                else
+                    irType.Fields.Add(irField);
+            }
+
+            // Calculate instance size
+            CalculateInstanceSize(irType);
+
+            // Methods: create shells with substituted types
+            foreach (var methodDef in openType.Methods)
+            {
+                var returnTypeName = ResolveGenericTypeName(methodDef.ReturnType, typeParamMap);
+                var cppName = CppNameMapper.MangleMethodName(info.MangledName, methodDef.Name);
+
+                var irMethod = new IRMethod
+                {
+                    Name = methodDef.Name,
+                    CppName = cppName,
+                    DeclaringType = irType,
+                    ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(returnTypeName),
+                    IsStatic = methodDef.IsStatic,
+                    IsVirtual = methodDef.IsVirtual,
+                    IsAbstract = methodDef.IsAbstract,
+                    IsConstructor = methodDef.IsConstructor,
+                    IsStaticConstructor = methodDef.IsConstructor && methodDef.IsStatic,
+                };
+
+                // Parameters
+                foreach (var paramDef in methodDef.Parameters)
+                {
+                    var paramTypeName = ResolveGenericTypeName(paramDef.ParameterType, typeParamMap);
+                    irMethod.Parameters.Add(new IRParameter
+                    {
+                        Name = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                        CppName = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                        CppTypeName = CppNameMapper.GetCppTypeForDecl(paramTypeName),
+                        Index = paramDef.Index,
+                    });
+                }
+
+                // Local variables
+                if (methodDef.HasBody)
+                {
+                    foreach (var localDef in methodDef.Body.Variables)
+                    {
+                        var localTypeName = ResolveGenericTypeName(localDef.VariableType, typeParamMap);
+                        irMethod.Locals.Add(new IRLocal
+                        {
+                            Index = localDef.Index,
+                            CppName = $"loc_{localDef.Index}",
+                            CppTypeName = CppNameMapper.GetCppTypeForDecl(localTypeName),
+                        });
+                    }
+                }
+
+                irType.Methods.Add(irMethod);
+
+                // Convert method body with generic substitution context
+                if (methodDef.HasBody && !methodDef.IsAbstract)
+                {
+                    var methodInfo = new IL.MethodInfo(methodDef);
+                    ConvertMethodBodyWithGenerics(methodInfo, irMethod, typeParamMap);
+                }
+            }
+
+            _module.Types.Add(irType);
+            _typeCache[key] = irType;
+        }
+    }
+
+    /// <summary>
+    /// Resolve a Cecil TypeReference to an IL type name, substituting generic parameters.
+    /// </summary>
+    private string ResolveGenericTypeName(TypeReference typeRef, Dictionary<string, string> typeParamMap)
+    {
+        if (typeRef is GenericParameter gp)
+        {
+            return typeParamMap.TryGetValue(gp.Name, out var resolved) ? resolved : gp.FullName;
+        }
+
+        if (typeRef is GenericInstanceType git)
+        {
+            var openName = git.ElementType.FullName;
+            var args = git.GenericArguments.Select(a => ResolveGenericTypeName(a, typeParamMap)).ToList();
+            var key = $"{openName}<{string.Join(",", args)}>";
+            return key;
+        }
+
+        if (typeRef is ArrayType at)
+        {
+            return ResolveGenericTypeName(at.ElementType, typeParamMap) + "[]";
+        }
+
+        if (typeRef is ByReferenceType brt)
+        {
+            return ResolveGenericTypeName(brt.ElementType, typeParamMap) + "&";
+        }
+
+        return typeRef.FullName;
+    }
+
+    /// <summary>
+    /// Convert a method body from an open generic type with generic parameter substitution.
+    /// </summary>
+    private void ConvertMethodBodyWithGenerics(IL.MethodInfo methodDef, IRMethod irMethod,
+        Dictionary<string, string> typeParamMap)
+    {
+        // Use the same ConvertMethodBody logic — the type resolution happens
+        // at the instruction level where GetCppTypeName/MangleTypeName are called.
+        // We store the type param map in a field so ConvertInstruction can use it.
+        _activeTypeParamMap = typeParamMap;
+        try
+        {
+            ConvertMethodBody(methodDef, irMethod);
+        }
+        finally
+        {
+            _activeTypeParamMap = null;
+        }
+    }
+
+    // Active generic type parameter map (set during ConvertMethodBodyWithGenerics)
+    private Dictionary<string, string>? _activeTypeParamMap;
+
+    /// <summary>
+    /// Resolve a Cecil TypeReference FullName through the active generic type param map.
+    /// </summary>
+    private string ResolveActiveGenericType(TypeReference typeRef)
+    {
+        if (_activeTypeParamMap == null) return typeRef.FullName;
+        return ResolveGenericTypeName(typeRef, _activeTypeParamMap);
+    }
+
+    /// <summary>
+    /// Resolve a Cecil TypeReference to a cache key, handling GenericInstanceType.
+    /// </summary>
+    private string ResolveCacheKey(TypeReference typeRef)
+    {
+        if (typeRef is GenericInstanceType git)
+        {
+            var openTypeName = git.ElementType.FullName;
+            var typeArgs = git.GenericArguments.Select(a =>
+            {
+                if (a is GenericParameter gp && _activeTypeParamMap != null)
+                    return _activeTypeParamMap.TryGetValue(gp.Name, out var r) ? r : a.FullName;
+                return a.FullName;
+            }).ToList();
+            return $"{openTypeName}<{string.Join(",", typeArgs)}>";
+        }
+
+        if (typeRef is GenericParameter gp2 && _activeTypeParamMap != null)
+            return _activeTypeParamMap.TryGetValue(gp2.Name, out var resolved) ? resolved : typeRef.FullName;
+
+        return typeRef.FullName;
+    }
+
+    /// <summary>
+    /// Get the C++ type name for a Cecil TypeReference, handling generics.
+    /// </summary>
+    private string GetCppTypeNameForRef(TypeReference typeRef)
+    {
+        var key = ResolveCacheKey(typeRef);
+        if (_typeCache.TryGetValue(key, out var irType))
+        {
+            if (irType.IsValueType)
+                return irType.CppName;
+            return irType.CppName + "*";
+        }
+        return CppNameMapper.GetCppTypeForDecl(key);
+    }
+
+    /// <summary>
+    /// Get the C++ mangled type name for a Cecil TypeReference.
+    /// </summary>
+    private string GetMangledTypeNameForRef(TypeReference typeRef)
+    {
+        var key = ResolveCacheKey(typeRef);
+        if (_typeCache.TryGetValue(key, out var irType))
+            return irType.CppName;
+        return CppNameMapper.MangleTypeName(key);
+    }
+
+    /// <summary>
+    /// Resolve a type name string (possibly containing generic syntax) to C++ declaration type.
+    /// Handles GenericInstanceType names like "Wrapper`1&lt;System.Int32&gt;" by looking up the cache.
+    /// </summary>
+    private string ResolveTypeForDecl(string ilTypeName)
+    {
+        // Check if this is a known type in the cache (exact match)
+        if (_typeCache.TryGetValue(ilTypeName, out var cached))
+        {
+            if (cached.IsValueType)
+                return cached.CppName;
+            return cached.CppName + "*";
+        }
+
+        // Check if this looks like a generic instance type name: "Name`N<Arg1,Arg2,...>"
+        // Cecil FullName format: Wrapper`1<System.Int32>
+        var backtickIdx = ilTypeName.IndexOf('`');
+        if (backtickIdx > 0 && ilTypeName.Contains('<'))
+        {
+            // Try to find this in the generic instantiations via cache key
+            // Build the cache key: "OpenType`N<Arg1,Arg2>"
+            var angleBracket = ilTypeName.IndexOf('<');
+            var openTypeName = ilTypeName[..angleBracket];
+            var argsStr = ilTypeName[(angleBracket + 1)..^1]; // strip < and >
+            var args = argsStr.Split(',').Select(a => a.Trim()).ToList();
+            var key = $"{openTypeName}<{string.Join(",", args)}>";
+
+            if (_typeCache.TryGetValue(key, out var genericCached))
+            {
+                if (genericCached.IsValueType)
+                    return genericCached.CppName;
+                return genericCached.CppName + "*";
+            }
+        }
+
+        return CppNameMapper.GetCppTypeForDecl(ilTypeName);
+    }
+
     private IRType CreateTypeShell(TypeDefinitionInfo typeDef)
     {
         var cppName = CppNameMapper.MangleTypeName(typeDef.FullName);
@@ -137,6 +496,10 @@ public class IRBuilder
 
         if (typeDef.IsEnum)
             irType.EnumUnderlyingType = typeDef.EnumUnderlyingType ?? "System.Int32";
+
+        // Detect delegate types (base is System.MulticastDelegate)
+        if (typeDef.BaseTypeName is "System.MulticastDelegate" or "System.Delegate")
+            irType.IsDelegate = true;
 
         // Register value types for CppNameMapper so it doesn't add pointer suffix
         if (typeDef.IsValueType)
@@ -248,7 +611,7 @@ public class IRBuilder
             Name = methodDef.Name,
             CppName = cppName,
             DeclaringType = declaringType,
-            ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(methodDef.ReturnTypeName),
+            ReturnTypeCpp = ResolveTypeForDecl(methodDef.ReturnTypeName),
             IsStatic = methodDef.IsStatic,
             IsVirtual = methodDef.IsVirtual,
             IsAbstract = methodDef.IsAbstract,
@@ -281,7 +644,7 @@ public class IRBuilder
             {
                 Name = paramDef.Name,
                 CppName = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
-                CppTypeName = CppNameMapper.GetCppTypeForDecl(paramDef.TypeName),
+                CppTypeName = ResolveTypeForDecl(paramDef.TypeName),
                 Index = paramDef.Index,
             };
 
@@ -300,7 +663,7 @@ public class IRBuilder
             {
                 Index = localDef.Index,
                 CppName = $"loc_{localDef.Index}",
-                CppTypeName = CppNameMapper.GetCppTypeForDecl(localDef.TypeName),
+                CppTypeName = ResolveTypeForDecl(localDef.TypeName),
             });
         }
 
@@ -791,8 +1154,9 @@ public class IRBuilder
             case Code.Ldsfld:
             {
                 var fieldRef = (FieldReference)instr.Operand!;
-                var typeCppName = CppNameMapper.MangleTypeName(fieldRef.DeclaringType.FullName);
-                EmitCctorGuardIfNeeded(block, fieldRef.DeclaringType.FullName, typeCppName);
+                var typeCppName = GetMangledTypeNameForRef(fieldRef.DeclaringType);
+                var fieldCacheKey = ResolveCacheKey(fieldRef.DeclaringType);
+                EmitCctorGuardIfNeeded(block, fieldCacheKey, typeCppName);
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRStaticFieldAccess
                 {
@@ -807,8 +1171,9 @@ public class IRBuilder
             case Code.Stsfld:
             {
                 var fieldRef = (FieldReference)instr.Operand!;
-                var typeCppName = CppNameMapper.MangleTypeName(fieldRef.DeclaringType.FullName);
-                EmitCctorGuardIfNeeded(block, fieldRef.DeclaringType.FullName, typeCppName);
+                var typeCppName = GetMangledTypeNameForRef(fieldRef.DeclaringType);
+                var fieldCacheKey = ResolveCacheKey(fieldRef.DeclaringType);
+                EmitCctorGuardIfNeeded(block, fieldCacheKey, typeCppName);
                 var val = stack.Count > 0 ? stack.Pop() : "0";
                 block.Instructions.Add(new IRStaticFieldAccess
                 {
@@ -1001,11 +1366,11 @@ public class IRBuilder
                 var typeRef = (TypeReference)instr.Operand!;
                 var obj = stack.Count > 0 ? stack.Pop() : "nullptr";
                 var tmp = $"__t{tempCounter++}";
-                var targetType = CppNameMapper.MangleTypeName(typeRef.FullName);
+                var castTargetType = GetMangledTypeNameForRef(typeRef);
                 block.Instructions.Add(new IRCast
                 {
                     SourceExpr = obj,
-                    TargetTypeCpp = targetType + "*",
+                    TargetTypeCpp = castTargetType + "*",
                     ResultVar = tmp,
                     IsSafe = false
                 });
@@ -1018,11 +1383,11 @@ public class IRBuilder
                 var typeRef = (TypeReference)instr.Operand!;
                 var obj = stack.Count > 0 ? stack.Pop() : "nullptr";
                 var tmp = $"__t{tempCounter++}";
-                var targetType = CppNameMapper.MangleTypeName(typeRef.FullName);
+                var isinstTargetType = GetMangledTypeNameForRef(typeRef);
                 block.Instructions.Add(new IRCast
                 {
                     SourceExpr = obj,
-                    TargetTypeCpp = targetType + "*",
+                    TargetTypeCpp = isinstTargetType + "*",
                     ResultVar = tmp,
                     IsSafe = true
                 });
@@ -1122,6 +1487,53 @@ public class IRBuilder
                 break;
             }
 
+            // ===== Function pointers (delegates) =====
+            case Code.Ldftn:
+            {
+                var targetMethod = (MethodReference)instr.Operand!;
+                var targetTypeCpp = GetMangledTypeNameForRef(targetMethod.DeclaringType);
+                var methodCppName = CppNameMapper.MangleMethodName(targetTypeCpp, targetMethod.Name);
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRLoadFunctionPointer
+                {
+                    MethodCppName = methodCppName,
+                    ResultVar = tmp,
+                    IsVirtual = false
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            case Code.Ldvirtftn:
+            {
+                var targetMethod = (MethodReference)instr.Operand!;
+                var targetTypeCpp = GetMangledTypeNameForRef(targetMethod.DeclaringType);
+                var methodCppName = CppNameMapper.MangleMethodName(targetTypeCpp, targetMethod.Name);
+                var obj = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+
+                // Try to find vtable slot
+                int vtableSlot = -1;
+                if (_typeCache.TryGetValue(ResolveCacheKey(targetMethod.DeclaringType), out var targetType))
+                {
+                    var entry = targetType.VTable.FirstOrDefault(e => e.MethodName == targetMethod.Name
+                        && (e.Method == null || e.Method.Parameters.Count == targetMethod.Parameters.Count));
+                    if (entry != null)
+                        vtableSlot = entry.Slot;
+                }
+
+                block.Instructions.Add(new IRLoadFunctionPointer
+                {
+                    MethodCppName = methodCppName,
+                    ResultVar = tmp,
+                    IsVirtual = true,
+                    ObjectExpr = obj,
+                    VTableSlot = vtableSlot
+                });
+                stack.Push(tmp);
+                break;
+            }
+
             default:
                 block.Instructions.Add(new IRComment { Text = $"WARNING: Unsupported IL instruction: {instr}" });
                 Console.Error.WriteLine($"WARNING: Unsupported IL instruction '{instr.OpCode}' at IL_{instr.Offset:X4} in {method.CppName}");
@@ -1166,6 +1578,38 @@ public class IRBuilder
     private void EmitMethodCall(IRBasicBlock block, Stack<string> stack, MethodReference methodRef,
         bool isVirtual, ref int tempCounter)
     {
+        // Special: Delegate.Invoke — emit IRDelegateInvoke instead of normal call
+        var declaringCacheKey = ResolveCacheKey(methodRef.DeclaringType);
+        if (methodRef.Name == "Invoke" && methodRef.HasThis
+            && _typeCache.TryGetValue(declaringCacheKey, out var invokeType)
+            && invokeType.IsDelegate)
+        {
+            var invokeArgs = new List<string>();
+            for (int i = 0; i < methodRef.Parameters.Count; i++)
+                invokeArgs.Add(stack.Count > 0 ? stack.Pop() : "0");
+            invokeArgs.Reverse();
+
+            var delegateExpr = stack.Count > 0 ? stack.Pop() : "nullptr";
+
+            var invoke = new IRDelegateInvoke
+            {
+                DelegateExpr = delegateExpr,
+                ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName),
+            };
+            foreach (var p in methodRef.Parameters)
+                invoke.ParamTypes.Add(CppNameMapper.GetCppTypeForDecl(p.ParameterType.FullName));
+            invoke.Arguments.AddRange(invokeArgs);
+
+            if (methodRef.ReturnType.FullName != "System.Void")
+            {
+                var tmp = $"__t{tempCounter++}";
+                invoke.ResultVar = tmp;
+                stack.Push(tmp);
+            }
+            block.Instructions.Add(invoke);
+            return;
+        }
+
         // Special: RuntimeHelpers.InitializeArray(Array, RuntimeFieldHandle)
         if (methodRef.DeclaringType.FullName == "System.Runtime.CompilerServices.RuntimeHelpers"
             && methodRef.Name == "InitializeArray")
@@ -1189,7 +1633,7 @@ public class IRBuilder
         }
         else
         {
-            var typeCpp = CppNameMapper.MangleTypeName(methodRef.DeclaringType.FullName);
+            var typeCpp = GetMangledTypeNameForRef(methodRef.DeclaringType);
             irCall.FunctionName = CppNameMapper.MangleMethodName(typeCpp, methodRef.Name);
         }
 
@@ -1222,7 +1666,7 @@ public class IRBuilder
         // Virtual dispatch detection
         if (isVirtual && methodRef.HasThis && mappedName == null)
         {
-            var declaringTypeName = methodRef.DeclaringType.FullName;
+            var declaringTypeName = declaringCacheKey;
             var resolved = _typeCache.GetValueOrDefault(declaringTypeName);
 
             if (resolved != null && resolved.IsInterface)
@@ -1292,9 +1736,30 @@ public class IRBuilder
     private void EmitNewObj(IRBasicBlock block, Stack<string> stack, MethodReference ctorRef,
         ref int tempCounter)
     {
-        var typeCpp = CppNameMapper.MangleTypeName(ctorRef.DeclaringType.FullName);
-        var ctorName = CppNameMapper.MangleMethodName(typeCpp, ".ctor");
+        var cacheKey = ResolveCacheKey(ctorRef.DeclaringType);
+        var typeCpp = GetMangledTypeNameForRef(ctorRef.DeclaringType);
         var tmp = $"__t{tempCounter++}";
+
+        // Detect delegate constructor: base is MulticastDelegate/Delegate, ctor(object, IntPtr)
+        if (ctorRef.Parameters.Count == 2
+            && _typeCache.TryGetValue(cacheKey, out var delegateType)
+            && delegateType.IsDelegate)
+        {
+            // Stack has: [target (object), functionPtr (IntPtr)]
+            var fptr = stack.Count > 0 ? stack.Pop() : "nullptr";
+            var target = stack.Count > 0 ? stack.Pop() : "nullptr";
+            block.Instructions.Add(new IRDelegateCreate
+            {
+                DelegateTypeCppName = typeCpp,
+                TargetExpr = target,
+                FunctionPtrExpr = fptr,
+                ResultVar = tmp
+            });
+            stack.Push(tmp);
+            return;
+        }
+
+        var ctorName = CppNameMapper.MangleMethodName(typeCpp, ".ctor");
 
         // Collect constructor arguments
         var args = new List<string>();
@@ -1363,6 +1828,17 @@ public class IRBuilder
                 "Equals" => "cil2cpp::object_equals",
                 "GetType" => "cil2cpp::object_get_type",
                 ".ctor" => null, // Object ctor is a no-op
+                _ => null
+            };
+        }
+
+        // Delegate methods
+        if (fullType is "System.Delegate" or "System.MulticastDelegate")
+        {
+            return name switch
+            {
+                "Combine" => "cil2cpp::delegate_combine",
+                "Remove" => "cil2cpp::delegate_remove",
                 _ => null
             };
         }

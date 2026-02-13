@@ -188,6 +188,45 @@ public class CppNameMapperTests
         Assert.Equal("f____", result);
     }
 
+    [Theory]
+    [InlineData("<Name>k__BackingField", "f__Name_k__BackingField")]
+    [InlineData("<Age>k__BackingField", "f__Age_k__BackingField")]
+    [InlineData("<ManualProp>k__BackingField", "f__ManualProp_k__BackingField")]
+    public void MangleFieldName_BackingField_ProducesValidCppIdentifier(string input, string expected)
+    {
+        var result = CppNameMapper.MangleFieldName(input);
+        Assert.Equal(expected, result);
+        // Should not contain < or > (invalid C++ identifier chars)
+        Assert.DoesNotContain("<", result);
+        Assert.DoesNotContain(">", result);
+    }
+
+    // ===== MangleGenericInstanceTypeName =====
+
+    [Fact]
+    public void MangleGenericInstanceTypeName_SingleArg()
+    {
+        var result = CppNameMapper.MangleGenericInstanceTypeName("Wrapper`1", new[] { "System.Int32" });
+        Assert.Equal("Wrapper_1_System_Int32", result);
+    }
+
+    [Fact]
+    public void MangleGenericInstanceTypeName_MultipleArgs()
+    {
+        var result = CppNameMapper.MangleGenericInstanceTypeName("Pair`2", new[] { "System.String", "System.Int32" });
+        Assert.Equal("Pair_2_System_String_System_Int32", result);
+    }
+
+    [Fact]
+    public void MangleGenericInstanceTypeName_ProducesValidCppIdentifier()
+    {
+        var result = CppNameMapper.MangleGenericInstanceTypeName("MyNs.Container`1", new[] { "MyNs.Foo" });
+        Assert.DoesNotContain("<", result);
+        Assert.DoesNotContain(">", result);
+        Assert.DoesNotContain("`", result);
+        Assert.DoesNotContain(".", result);
+    }
+
     // ===== GetDefaultValue =====
 
     // ===== IsCompilerGeneratedType =====

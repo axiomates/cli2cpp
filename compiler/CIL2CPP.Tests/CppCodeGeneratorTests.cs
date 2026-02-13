@@ -1010,4 +1010,75 @@ public class CppCodeGeneratorTests
 
         Assert.Contains("Interface", output.SourceFile.Content);
     }
+
+    // ===== Phase 3: Delegate code generation =====
+
+    private static IRModule CreateModuleWithDelegate()
+    {
+        var module = new IRModule { Name = "Test" };
+        var delegateType = new IRType
+        {
+            ILFullName = "MathOp",
+            CppName = "MathOp",
+            Name = "MathOp",
+            Namespace = "",
+            IsDelegate = true,
+            IsSealed = true
+        };
+        module.Types.Add(delegateType);
+        return module;
+    }
+
+    [Fact]
+    public void Generate_DelegateType_EmitsUsingAlias()
+    {
+        var module = CreateModuleWithDelegate();
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("using MathOp = cil2cpp::Delegate;", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_DelegateType_NoStructDefinition()
+    {
+        var module = CreateModuleWithDelegate();
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.DoesNotContain("struct MathOp {", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_DelegateType_NoForwardDeclaration()
+    {
+        var module = CreateModuleWithDelegate();
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.DoesNotContain("struct MathOp;", output.HeaderFile.Content);
+    }
+
+    [Fact]
+    public void Generate_DelegateType_HasTypeInfo()
+    {
+        var module = CreateModuleWithDelegate();
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.Contains("extern cil2cpp::TypeInfo MathOp_TypeInfo;", output.HeaderFile.Content);
+        Assert.Contains("cil2cpp::TypeInfo MathOp_TypeInfo = {", output.SourceFile.Content);
+        Assert.Contains(".instance_size = sizeof(MathOp)", output.SourceFile.Content);
+    }
+
+    [Fact]
+    public void Generate_DelegateType_NoVTable()
+    {
+        var module = CreateModuleWithDelegate();
+        var gen = new CppCodeGenerator(module);
+        var output = gen.Generate();
+
+        Assert.DoesNotContain("MathOp_vtable_methods", output.SourceFile.Content);
+        Assert.DoesNotContain("MathOp_VTable", output.SourceFile.Content);
+    }
 }

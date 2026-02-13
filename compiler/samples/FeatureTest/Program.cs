@@ -121,6 +121,76 @@ public struct Vector2
     }
 }
 
+// Properties (auto-properties + manual properties)
+public class Person
+{
+    public string Name { get; set; }
+    public int Age { get; set; }
+
+    private int _manualProp;
+    public int ManualProp
+    {
+        get { return _manualProp; }
+        set { _manualProp = value * 2; }
+    }
+
+    public Person(string name, int age)
+    {
+        Name = name;
+        Age = age;
+    }
+}
+
+// IDisposable for using statements
+public interface IMyDisposable
+{
+    void Dispose();
+}
+
+public class DisposableResource : IMyDisposable
+{
+    private string _name;
+    private bool _disposed;
+
+    public DisposableResource(string name)
+    {
+        _name = name;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            Console.WriteLine(string.Concat("Disposed: ", _name));
+            _disposed = true;
+        }
+    }
+}
+
+// Delegate type
+public delegate int MathOp(int a, int b);
+
+// Generic class
+public class Wrapper<T>
+{
+    private T _value;
+
+    public Wrapper(T value)
+    {
+        _value = value;
+    }
+
+    public T GetValue()
+    {
+        return _value;
+    }
+
+    public void SetValue(T value)
+    {
+        _value = value;
+    }
+}
+
 // Class with readonly field (IsInitOnly)
 public class Config
 {
@@ -167,6 +237,11 @@ public class Program
         TestInterfaceDispatch();
         TestFinalizer();
         TestOperator();
+        TestProperties();
+        TestForeachArray();
+        TestUsing();
+        TestDelegate();
+        TestGenerics();
     }
 
     static void TestArithmetic()
@@ -480,5 +555,56 @@ public class Program
         var v3 = v1 + v2;
         Console.WriteLine(v3.X);
         Console.WriteLine(v3.Y);
+    }
+
+    static void TestProperties()
+    {
+        var person = new Person("Alice", 30);
+        Console.WriteLine(person.Name);     // auto-property getter
+        Console.WriteLine(person.Age);      // auto-property getter
+        person.ManualProp = 5;              // manual property setter (value * 2)
+        Console.WriteLine(person.ManualProp); // manual property getter → 10
+    }
+
+    static void TestForeachArray()
+    {
+        int[] numbers = new int[] { 10, 20, 30, 40, 50 };
+        int sum = 0;
+        foreach (int n in numbers)
+        {
+            sum += n;
+        }
+        Console.WriteLine(sum); // 150
+    }
+
+    static void TestUsing()
+    {
+        var res = new DisposableResource("test");
+        Console.WriteLine("Using resource");
+        res.Dispose();
+        // Should print: "Using resource" then "Disposed: test"
+    }
+
+    static int StaticAdd(int a, int b)
+    {
+        return a + b;
+    }
+
+    static void TestDelegate()
+    {
+        // Static method delegate
+        MathOp add = StaticAdd;
+        Console.WriteLine(add(3, 4)); // 7
+    }
+
+    static void TestGenerics()
+    {
+        var intW = new Wrapper<int>(42);
+        Console.WriteLine(intW.GetValue()); // 42
+        intW.SetValue(100);
+        Console.WriteLine(intW.GetValue()); // 100
+
+        var strW = new Wrapper<string>("Hello");
+        Console.WriteLine(strW.GetValue()); // Hello
     }
 }
