@@ -618,6 +618,48 @@ def cmd_integration(args):
     runner.step("HelloWorld source contains string_literal calls", str_has_literal_calls)
     runner.step("HelloWorld source contains __init_string_literals", str_has_init_fn)
 
+    # ===== Phase 5: Multi-assembly codegen =====
+    header("Phase 5: Multi-assembly codegen (MathLib + MultiAssemblyTest)")
+
+    multi_sample = SAMPLES_DIR / "MultiAssemblyTest" / "MultiAssemblyTest.csproj"
+    multi_output = temp_dir / "multi_output"
+
+    def multi_codegen():
+        run(["dotnet", "run", "--project", str(CLI_PROJECT), "--",
+             "codegen", "-i", str(multi_sample), "-o", str(multi_output),
+             "--multi-assembly"],
+            capture=True)
+
+    def multi_files_exist():
+        for f in ["MultiAssemblyTest.h", "MultiAssemblyTest.cpp", "main.cpp", "CMakeLists.txt"]:
+            if not (multi_output / f).exists():
+                raise RuntimeError(f"Missing: {f}")
+
+    def multi_header_has_mathlib_types():
+        hdr = (multi_output / "MultiAssemblyTest.h").read_text(encoding="utf-8", errors="replace")
+        if "MathLib_MathUtils" not in hdr:
+            raise RuntimeError("MathUtils type not found in header")
+        if "MathLib_Counter" not in hdr:
+            raise RuntimeError("Counter type not found in header")
+
+    def multi_source_has_cross_assembly_calls():
+        src = (multi_output / "MultiAssemblyTest.cpp").read_text(encoding="utf-8", errors="replace")
+        if "MathLib_MathUtils_Add" not in src:
+            raise RuntimeError("Cross-assembly MathUtils_Add call not found")
+        if "MathLib_Counter" not in src:
+            raise RuntimeError("Cross-assembly Counter usage not found")
+
+    def multi_source_has_entry_point():
+        main = (multi_output / "main.cpp").read_text(encoding="utf-8", errors="replace")
+        if "Program_Main" not in main:
+            raise RuntimeError("Entry point not found in main.cpp")
+
+    runner.step("Multi-assembly codegen (--multi-assembly flag)", multi_codegen)
+    runner.step("Generated files exist", multi_files_exist)
+    runner.step("Header contains MathLib types", multi_header_has_mathlib_types)
+    runner.step("Source has cross-assembly method calls", multi_source_has_cross_assembly_calls)
+    runner.step("Main has entry point", multi_source_has_entry_point)
+
     # ===== Cleanup =====
     header("Cleanup")
 

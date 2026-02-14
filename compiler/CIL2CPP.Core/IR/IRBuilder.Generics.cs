@@ -32,7 +32,7 @@ public partial class IRBuilder
     /// </summary>
     private void ScanGenericInstantiations()
     {
-        foreach (var typeDef in _reader.GetAllTypes())
+        foreach (var typeDef in _allTypes!)
         {
             foreach (var methodDef in typeDef.Methods)
             {

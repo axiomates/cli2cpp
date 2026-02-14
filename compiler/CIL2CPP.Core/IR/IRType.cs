@@ -1,3 +1,5 @@
+using CIL2CPP.Core.IL;
+
 namespace CIL2CPP.Core.IR;
 
 /// <summary>
@@ -59,6 +61,15 @@ public class IRType
 
     /// <summary>The Finalize() method, if this type has one.</summary>
     public IRMethod? Finalizer { get; set; }
+
+    /// <summary>Assembly origin classification (User, ThirdParty, BCL).</summary>
+    public AssemblyKind SourceKind { get; set; } = AssemblyKind.User;
+
+    /// <summary>
+    /// True if this type is already provided by the C++ runtime (e.g., System.Object, System.String).
+    /// These types should not emit struct/method definitions in generated code.
+    /// </summary>
+    public bool IsRuntimeProvided { get; set; }
 
     /// <summary>
     /// Get the C++ type name for use in declarations.

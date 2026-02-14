@@ -356,8 +356,8 @@ void Program_Main() {
 | struct (值类型) | ⚠️ | 结构体定义 + initobj + 装箱/拆箱已支持；无完整拷贝语义 |
 | enum | ✅ | typedef 到底层整数类型 + constexpr 命名常量 + TypeInfo (Enum\|ValueType 标志) |
 | 装箱 / 拆箱 | ✅ | box / unbox / unbox.any → `cil2cpp::box<T>()` / `cil2cpp::unbox<T>()` |
-| Nullable\<T\> | ❌ | 需要泛型支持 |
-| Tuple (ValueTuple) | ❌ | 需要泛型支持 |
+| Nullable\<T\> | ⚠️ | 泛型 + 多程序集基础设施已就绪，需要 BCL 结构体翻译完善 |
+| Tuple (ValueTuple) | ⚠️ | 同上 |
 | record | ❌ | |
 
 ### 面向对象
@@ -428,23 +428,24 @@ void Program_Main() {
 | rethrow | ✅ | `CIL2CPP_RETHROW` |
 | 自动 null 检查 | ✅ | `null_check()` 内联函数 |
 | 栈回溯 | ⚠️ | `capture_stack_trace()` — Windows: DbgHelp, POSIX: backtrace；仅 Debug |
-| using 语句 | ❌ | 接口分派已支持，但需定义 IDisposable 接口 + Dispose() 映射 |
+| using 语句 | ⚠️ | try/finally + 接口分派已支持；需要 IDisposable 接口映射（多程序集模式下 BCL 可自动翻译） |
 | 嵌套 try/catch/finally | ⚠️ | 宏基于 setjmp/longjmp，支持嵌套但复杂场景可能有限 |
 
 ### 标准库 (BCL)
 
-> 当前：`MapBclMethod()` 硬编码映射（每个 BCL 方法手动添加）
-> 目标：Unity IL2CPP 风格，BCL IL 自动翻译 + icall 层（详见路线图 Phase 4）
+> Phase 4 已实现多程序集加载 + 树摇 + ICall 注册表，BCL 类型可通过 `--multi-assembly` 自动翻译。
+> 单程序集模式仍使用 `MapBclMethod()` 硬编码映射。
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | 手写映射 |
-| System.String (Concat, IsNullOrEmpty, Length) | ✅ | 手写映射 |
+| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | 手写映射 + 运行时实现 |
+| System.String (Concat, IsNullOrEmpty, Length) | ✅ | 手写映射 + 运行时实现 |
 | Console.WriteLine (全部重载) | ✅ | 手写映射，String, Int32, Int64, Single, Double, Boolean, Object |
 | Console.Write / ReadLine | ✅ | 手写映射 |
 | System.Math | ✅ | Abs, Max, Min, Sqrt, Floor, Ceil, Round, Pow, Sin, Cos, Tan, Asin, Acos, Atan, Atan2, Log, Log10, Exp → `<cmath>` |
-| 集合类 (List, Dictionary, HashSet 等) | ❌ | Phase 4: BCL IL 自动翻译（需要 Phase 3 泛型） |
-| System.IO (File, Stream) | ❌ | Phase 4: BCL IL 自动翻译 + 文件系统 icall |
+| 多程序集 BCL 自动翻译 | ⚠️ | `--multi-assembly` 模式：自动加载 BCL 程序集 + 树摇 + IL 翻译；需要更多 icall 覆盖 |
+| 集合类 (List, Dictionary, HashSet 等) | ⚠️ | 多程序集基础设施已就绪，需要完善 BCL icall 覆盖 |
+| System.IO (File, Stream) | ❌ | 需要文件系统 icall 实现 |
 | System.Net | ❌ | Phase 5 |
 
 ### 委托与事件
@@ -455,7 +456,7 @@ void Program_Main() {
 | 事件 (event) | ✅ | C# 生成 add_/remove_ 方法 + 委托字段，Subscribe/Unsubscribe 通过 `Delegate.Combine/Remove` |
 | 多播委托 | ✅ | `Delegate.Combine` / `Delegate.Remove` 映射到运行时 `delegate_combine` / `delegate_remove` |
 | Lambda / 匿名方法 | ✅ | C# 编译器生成 `<>c` 静态类（无捕获）/ `<>c__DisplayClass`（闭包），编译器自动处理 |
-| LINQ | ❌ | 需要泛型 + 委托 + IEnumerable\<T\> |
+| LINQ | ⚠️ | 泛型 + 委托已支持，需要 `IEnumerable<T>` BCL 翻译（多程序集基础设施已就绪） |
 
 ### 高级功能
 
@@ -486,6 +487,54 @@ void Program_Main() {
 
 ---
 
+## 已知限制
+
+### 计划实现的限制
+
+以下功能当前不支持，但在技术上可行，计划在未来版本中实现：
+
+| 限制 | 说明 | 计划阶段 |
+|------|------|---------|
+| 溢出检查算术 (`checked`) | `add.ovf` / `mul.ovf` 等 IL 指令未处理，不抛 `OverflowException` | Phase 5 |
+| 部分间接操作 (`ldind_*` / `stind_*`) | 仅支持 `ldind_i4` / `ldind_ref` / `stind_i4` / `stind_ref`，其他变体缺失 | Phase 5 |
+| `Span<T>` / `Memory<T>` / `ref struct` | 需要 byref 语义和栈分配支持 | Phase 5 |
+| 多维数组 (`T[,]`) | 仅支持一维数组 (`T[]`)，多维数组需要不同的内存布局 | Phase 5 |
+| `Nullable<T>` | 需要 BCL 泛型结构体翻译（基础设施已在 Phase 4 就绪） | Phase 5 |
+| `async` / `await` | 需要状态机生成 + `Task<T>` BCL 翻译 | Phase 5 |
+| 多线程 (`Thread`, `Task`, `lock`) | `Monitor.Enter/Exit` 当前为空操作 stub，需要真正的同步原语 | Phase 5 |
+| 反射 (`Type.GetMethods` 等) | TypeInfo 结构已有 MethodInfo/FieldInfo 数组但尚未填充 | Phase 5 |
+| 特性 (`Attribute`) | 元数据存储和运行时查询 | Phase 5 |
+| P/Invoke / DllImport | 原生互操作，需要 marshaling 层 | Phase 5 |
+| `unsafe` 代码 (`fixed`, `stackalloc`) | 部分 `ldobj`/`stobj` 已支持；`fixed`/`stackalloc` 未处理 | Phase 5 |
+| LINQ | 需要 `IEnumerable<T>` BCL 翻译（基础设施已在 Phase 4 就绪） | Phase 5 |
+| 集合类 (`List<T>`, `Dictionary<K,V>`) | 需要 BCL 泛型类翻译（基础设施已在 Phase 4 就绪） | Phase 5 |
+| 索引器 | 编译器未识别 `get_Item`/`set_Item` 属性模式 | Phase 5 |
+| `record` 类型 | 需要编译器生成的 `Equals`/`GetHashCode`/`ToString` 支持 | Phase 5 |
+| `Tuple` / `ValueTuple` | 需要 BCL 泛型结构体翻译 | Phase 5 |
+| `using` 语句 | try/finally 已支持，需要 `IDisposable` 接口映射 | Phase 5 |
+| 默认参数 / 命名参数 | 编译器未处理 IL 中的可选参数元数据 | Phase 5 |
+| `init`-only setter | 需要 `modreq` 元数据识别 | Phase 5 |
+| 增量/并发 GC | BoehmGC 支持增量模式，当前未启用 | Phase 5 |
+| SIMD / `System.Numerics.Vector` | 无平台内联函数 (intrinsics) 支持 | Phase 5+ |
+
+### AOT 架构根本限制
+
+以下功能由于 AOT（Ahead-of-Time）编译模型的固有约束，**无法支持**。这与 Unity IL2CPP 和 .NET NativeAOT 的限制相同。
+
+| 限制 | 原因 |
+|------|------|
+| `System.Reflection.Emit` | 运行时生成 IL 并执行——AOT 编译后无 IL 解释器/JIT |
+| `DynamicMethod` | 运行时创建方法并执行——同上 |
+| `Expression<T>.Compile()` | 运行时编译表达式树为可执行代码 |
+| `Assembly.Load()` / `Assembly.LoadFrom()` | 运行时动态加载程序集——AOT 要求所有代码在编译期可知 |
+| `Activator.CreateInstance(string typeName)` | 按名称字符串动态实例化——编译期无法确定目标类型 |
+| `MethodInfo.Invoke()` | 反射调用任意方法——需要运行时解释器或 JIT |
+| `Type.MakeGenericType()` | 运行时构造泛型类型——单态化必须在编译期完成 |
+| `ExpandoObject` / `dynamic` | DLR (Dynamic Language Runtime) 完全依赖运行时绑定 |
+| 运行时代码热更新 | 无 JIT 编译器，编译后的机器码不可替换 |
+
+---
+
 ## 开发路线图
 
 基于功能依赖关系的分阶段实现计划。每个阶段产出可用的增量：
@@ -502,24 +551,24 @@ Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托) �
        │                    │                        │
        └────────────────────┘────────────────────────┘
                                                      │
-                  Phase 4 (BCL 自动翻译)         Phase 5 (高级运行时)
-                    mscorlib IL → C++              async/await
-                    System.dll IL → C++            多线程
-                    icall 层                       反射 / 特性
-                    淘汰 MapBclMethod()            分代 GC
-                    语言特性 (LINQ, ...)           P/Invoke / unsafe
+              Phase 4 (多程序集/树摇) ✅         Phase 5 (高级运行时)
+                多程序集加载+解析                  async/await
+                可达性分析 (树摇)                  多线程
+                ICall 注册表                      反射 / 特性
+                BCL 类型自动翻译                   增量/并发 GC
+                --multi-assembly CLI              P/Invoke / unsafe
 ```
 
 ### BCL 策略：从手写映射到自动翻译
 
-当前 BCL 支持通过 `MapBclMethod()` 硬编码映射（如 `Console.WriteLine` → `cil2cpp::System::Console_WriteLine`）。长期目标是采用 **Unity IL2CPP 风格**：将 BCL 程序集的 IL 和用户代码一起翻译为 C++，仅在最底层提供 icall（内部调用）实现。
+Phase 1-3 的 BCL 支持通过 `MapBclMethod()` 硬编码映射（如 `Console.WriteLine` → `cil2cpp::System::Console_WriteLine`）。Phase 4 实现了 **Unity IL2CPP 风格**的多程序集架构：将 BCL 程序集的 IL 和用户代码一起翻译为 C++，仅在最底层提供 icall（内部调用）实现。
 
 ```
-当前 (Phase 1-2):                      目标 (Phase 4+):
-  C# 用户代码                            C# 用户代码
-      ↓ IL → C++                             ↓ IL → C++
-  MapBclMethod() 硬编码映射               mscorlib.dll / System.dll
-      ↓                                      ↓ IL → C++ (同一流水线)
+Phase 1-3 (单程序集):                   Phase 4+ (多程序集):
+  C# 用户代码                            C# 用户代码 + 第三方库 + BCL
+      ↓ IL → C++                             ↓ IL → C++ (同一流水线)
+  MapBclMethod() 硬编码映射               可达性分析 (树摇)
+      ↓                                      ↓ 仅翻译可达类型
   手写 C++ 运行时实现                     icall 层 (C++ 薄封装)
       ↓                                      ↓
   printf / <cmath> / ...                 printf / <cmath> / OS API / ...
@@ -533,8 +582,8 @@ Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托) �
 |------|---------|--------|
 | Phase 1-2 | `MapBclMethod()` 手写映射 + 手写 C++ 实现 | Object, String, Console, Math |
 | Phase 3 | 手写映射 + 开始识别 `[InternalCall]` 特性 | 同上 + 泛型集合类（手写） |
-| Phase 4 | **BCL IL 自动翻译** + icall 层 | mscorlib.dll 中大部分类型 |
-| Phase 5 | 完整 BCL 翻译 | System.dll, System.IO, System.Net 等 |
+| Phase 4 ✅ | **多程序集加载 + 树摇 + ICall 注册表** | 跨程序集类型/方法解析，自动翻译可达 BCL 类型 |
+| Phase 5 | 完整 BCL icall 覆盖 + 高级运行时 | System.IO, System.Net, async/await 等 |
 
 ### Phase 1：基础完善 ✅ 已完成
 
@@ -579,31 +628,21 @@ Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托) �
 | **Lambda / 闭包** | ✅ | C# 编译器生成 `<>c` 静态类（无捕获）/ `<>c__DisplayClass`（闭包），编译器自动处理 |
 | **`[InternalCall]` 识别** | ✅ | 编译器检测 `MethodImplOptions.InternalCall` 特性，跳过方法体生成。为 Phase 4 icall 层做准备 |
 
-### Phase 4：BCL 自动翻译 + 语言特性
+### Phase 4：多程序集 + 树摇 ✅ 已完成
 
-**架构升级**：将 BCL 程序集（mscorlib.dll、System.dll）作为输入，和用户代码一起通过 IL → C++ 流水线翻译。淘汰 `MapBclMethod()` 硬编码映射。
+多程序集加载、跨程序集类型解析、可达性分析（树摇）、ICall 注册表。支持第三方库和 BCL IL 自动翻译。
 
-| 功能 | 说明 |
-|------|------|
-| **多程序集输入** | CLI 接受多个 .dll 输入（或自动解析引用的 BCL 程序集），全部喂入 IRBuilder |
-| **icall 层** | 为 `[InternalCall]` 方法提供 C++ 原生实现。初期覆盖：数学函数（`<cmath>`）、字符串操作（UTF-16）、Console I/O（`<cstdio>`）、文件操作（`<filesystem>`） |
-| **BCL 类型裁剪** | 只翻译用户代码实际引用到的 BCL 类型和方法（tree shaking），避免翻译整个 mscorlib |
-| **LINQ** | BCL 自动翻译后自然可用（需要泛型 + 委托 + IEnumerable\<T\>） |
-| **Nullable\<T\>** | BCL 自动翻译后自然可用 |
-| **using 语句** | try/finally（Phase 1）+ IDisposable（Phase 2）→ 自动生效 |
-| **System.IO / System.Math / System.Net** | BCL IL 自动翻译 + 对应 icall 实现 |
-
-**icall 实现清单（按优先级）：**
-
-| icall 类别 | C++ 实现 | 涉及的 BCL 类型 |
-|-----------|---------|----------------|
-| 数学运算 | `<cmath>` | System.Math, System.MathF |
-| 字符串内部 | UTF-16 操作 | System.String (内部方法) |
-| Console I/O | `<cstdio>` | System.Console |
-| 文件系统 | `<filesystem>` / OS API | System.IO.File, Path, Directory |
-| 环境 | OS API | System.Environment |
-| 时间 | `<chrono>` | System.DateTime, Stopwatch |
-| 线程 | `<thread>` / OS API | System.Threading (Phase 5) |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **自定义程序集解析器** | ✅ | `CIL2CPPAssemblyResolver`：使 Mono.Cecil 的 `.Resolve()` 跨程序集工作（搜索输出目录、NuGet 缓存、.NET 运行时目录） |
+| **deps.json 解析** | ✅ | `DepsJsonParser`：解析 `dotnet build` 生成的 deps.json，发现 NuGet 包依赖及其 DLL 路径 |
+| **.NET 运行时定位** | ✅ | `RuntimeLocator`：通过 runtimeconfig.json 定位 .NET 实现程序集（`System.Private.CoreLib.dll` 等） |
+| **多程序集容器** | ✅ | `AssemblySet`：统一管理根程序集 + 依赖程序集，按来源分类（User / ThirdParty / BCL），按需懒加载 |
+| **可达性分析（树摇）** | ✅ | `ReachabilityAnalyzer`：从入口点出发的工作表定点算法，扫描 IL 指令发现可达类型和方法，避免编译不需要的 BCL 类型 |
+| **ICall 注册表** | ✅ | `ICallRegistry`：42+ 个 `[InternalCall]` 方法到 C++ 函数的映射（Object, String, Array, Math, Environment, GC, Buffer, Type, Monitor, RuntimeHelpers） |
+| **运行时提供类型过滤** | ✅ | 代码生成器跳过已有 C++ 运行时实现的类型（Object, String, Array, Exception, Delegate）的结构体定义和方法实现 |
+| **`--multi-assembly` CLI** | ✅ | 新增命令行标志，启用完整多程序集流水线：AssemblySet → 可达性分析 → IRBuilder → C++ 代码生成 |
+| **运行时 icall 实现** | ✅ | `runtime/src/icall/icall.cpp`：Environment (NewLine, TickCount, ProcessorCount)、Buffer (Memmove, BlockCopy)、Type (GetTypeFromHandle)、Monitor (Enter/Exit stub)、RuntimeHelpers (InitializeArray) |
 
 ### Phase 5：高级运行时
 
@@ -686,7 +725,7 @@ runtime/CMakeLists.txt
 
 ### 编译器单元测试 (C# / xUnit)
 
-测试覆盖：类型映射 (CppNameMapper)、构建配置 (BuildConfiguration)、IR 模块/方法/指令、C++ 代码生成器。
+测试覆盖：类型映射 (CppNameMapper)、构建配置 (BuildConfiguration)、IR 模块/方法/指令、C++ 代码生成器、程序集解析 (AssemblyResolver/AssemblySet)、可达性分析 (ReachabilityAnalyzer)。
 
 ```bash
 # 运行测试
@@ -707,11 +746,16 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 | IRModule | 44 |
 | IRMethod | 30 |
 | IRType | 23 |
+| AssemblySet | 16 |
+| ReachabilityAnalyzer | 16 |
 | BuildConfiguration | 15 |
 | AssemblyReader | 12 |
-| SequencePointInfo | 5 |
+| AssemblyResolver | 12 |
+| DepsJsonParser | 10 |
+| RuntimeLocator | 7 |
 | IRField / IRVTableEntry / IRInterfaceImpl | 7 |
-| **合计** | **743** |
+| SequencePointInfo | 5 |
+| **合计** | **814** |
 
 ### 运行时单元测试 (C++ / Google Test)
 
@@ -754,7 +798,8 @@ python tools/dev.py integration
 | 2 | 类库项目（无入口点 → add_library → build） | 4 |
 | 3 | Debug 配置（#line 指令、IL 注释、Debug build + run） | 4 |
 | 4 | 字符串字面量（string_literal、__init_string_literals） | 2 |
-| **合计** | | **18** |
+| 5 | 多程序集代码生成（--multi-assembly、跨程序集类型/方法、MathLib 引用） | 5 |
+| **合计** | | **23** |
 
 ### 全部运行
 
@@ -781,7 +826,7 @@ python tools/dev.py build                  # 编译 compiler + runtime
 python tools/dev.py build --compiler       # 仅编译 compiler
 python tools/dev.py build --runtime        # 仅编译 runtime
 python tools/dev.py test --all             # 运行全部测试（编译器 + 运行时 + 集成）
-python tools/dev.py test --compiler        # 仅编译器测试 (743 xUnit)
+python tools/dev.py test --compiler        # 仅编译器测试 (814 xUnit)
 python tools/dev.py test --runtime         # 仅运行时测试 (249 GTest)
 python tools/dev.py test --coverage        # 测试 + 覆盖率 HTML 报告
 python tools/dev.py install                # 安装 runtime (Debug + Release)

@@ -19,10 +19,32 @@ public partial class IRBuilder
         public const int GetHashCodeSlot = 2;
     }
 
+    /// <summary>
+    /// Set of IL type full names that have C++ runtime implementations.
+    /// These types get IsRuntimeProvided = true and should not emit struct definitions.
+    /// </summary>
+    private static readonly HashSet<string> RuntimeProvidedTypes = new()
+    {
+        "System.Object",
+        "System.ValueType",
+        "System.Enum",
+        "System.String",
+        "System.Array",
+        "System.Exception",
+        "System.Delegate",
+        "System.MulticastDelegate",
+    };
+
     private readonly AssemblyReader _reader;
     private readonly IRModule _module;
     private readonly BuildConfiguration _config;
     private readonly Dictionary<string, IRType> _typeCache = new();
+
+    // Multi-assembly mode fields (null in single-assembly mode)
+    private AssemblySet? _assemblySet;
+    private ReachabilityResult? _reachability;
+    // Pre-computed list of types to process (set by both Build overloads)
+    private List<TypeDefinitionInfo>? _allTypes;
 
     // Generic type instantiation tracking
     private readonly Dictionary<string, GenericInstantiationInfo> _genericInstantiations = new();
@@ -53,9 +75,37 @@ public partial class IRBuilder
     }
 
     /// <summary>
-    /// Build the complete IR module from the assembly.
+    /// Build the complete IR module from a single assembly (existing behavior).
     /// </summary>
     public IRModule Build()
+    {
+        _allTypes = _reader.GetAllTypes().ToList();
+        return BuildInternal();
+    }
+
+    /// <summary>
+    /// Build the IR module from multiple assemblies, filtered by reachability.
+    /// Types are classified by SourceKind and RuntimeProvided status.
+    /// </summary>
+    public IRModule Build(AssemblySet assemblySet, ReachabilityResult reachability)
+    {
+        _assemblySet = assemblySet;
+        _reachability = reachability;
+
+        _module.Name = assemblySet.RootAssemblyName;
+
+        // Collect all reachable types as TypeDefinitionInfo, with classification
+        var types = new List<TypeDefinitionInfo>();
+        foreach (var cecilType in reachability.ReachableTypes)
+        {
+            types.Add(new TypeDefinitionInfo(cecilType));
+        }
+        _allTypes = types;
+
+        return BuildInternal();
+    }
+
+    private IRModule BuildInternal()
     {
         CppNameMapper.ClearValueTypes();
 
@@ -64,11 +114,20 @@ public partial class IRBuilder
 
         // Pass 1: Create all type shells (no fields/methods yet)
         // Skip open generic types — they are templates, not concrete types
-        foreach (var typeDef in _reader.GetAllTypes())
+        foreach (var typeDef in _allTypes!)
         {
             if (typeDef.HasGenericParameters)
                 continue;
             var irType = CreateTypeShell(typeDef);
+
+            // Classify type origin and runtime-provided status
+            if (_assemblySet != null)
+            {
+                var assemblyName = typeDef.GetCecilType().Module.Assembly.Name.Name;
+                irType.SourceKind = _assemblySet.ClassifyAssembly(assemblyName);
+                irType.IsRuntimeProvided = RuntimeProvidedTypes.Contains(typeDef.FullName);
+            }
+
             _module.Types.Add(irType);
             _typeCache[typeDef.FullName] = irType;
         }
@@ -77,7 +136,7 @@ public partial class IRBuilder
         CreateGenericSpecializations();
 
         // Pass 2: Fill in fields, base types, interfaces
-        foreach (var typeDef in _reader.GetAllTypes())
+        foreach (var typeDef in _allTypes)
         {
             if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType))
@@ -87,7 +146,7 @@ public partial class IRBuilder
         }
 
         // Pass 2.5: Flag types with static constructors (before method conversion)
-        foreach (var typeDef in _reader.GetAllTypes())
+        foreach (var typeDef in _allTypes)
         {
             if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType2))
@@ -99,7 +158,7 @@ public partial class IRBuilder
         // Pass 3: Create method shells (no body yet — needed for VTable)
         // Skip open generic methods — they are templates, specialized in Pass 3.5
         var methodBodies = new List<(IL.MethodInfo MethodDef, IRMethod IRMethod)>();
-        foreach (var typeDef in _reader.GetAllTypes())
+        foreach (var typeDef in _allTypes)
         {
             if (typeDef.HasGenericParameters) continue;
             if (_typeCache.TryGetValue(typeDef.FullName, out var irType))
@@ -112,11 +171,15 @@ public partial class IRBuilder
                     var irMethod = ConvertMethod(methodDef, irType);
                     irType.Methods.Add(irMethod);
 
-                    // Detect entry point
+                    // Detect entry point (only from root assembly in multi-assembly mode)
                     if (methodDef.Name == "Main" && methodDef.IsStatic)
                     {
-                        irMethod.IsEntryPoint = true;
-                        _module.EntryPoint = irMethod;
+                        if (_assemblySet == null ||
+                            typeDef.GetCecilType().Module.Assembly.Name.Name == _assemblySet.RootAssemblyName)
+                        {
+                            irMethod.IsEntryPoint = true;
+                            _module.EntryPoint = irMethod;
+                        }
                     }
 
                     // Track finalizer

@@ -59,6 +59,7 @@ set(RUNTIME_SOURCES
     src/bcl/System.Console.cpp
     src/bcl/System.Array.cpp
     src/bcl/System.Delegate.cpp
+    src/icall/icall.cpp
 )
 
 # Create static library

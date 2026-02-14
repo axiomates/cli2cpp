@@ -1915,4 +1915,79 @@ public class IRBuilderTests
         Assert.NotNull(stringFunc);
         Assert.True(stringFunc!.IsDelegate);
     }
+
+    // Multi-assembly Build path tests
+    [Fact]
+    public void Build_MultiAssembly_HelloWorld_ProducesModule()
+    {
+        using var set = new AssemblySet(_fixture.HelloWorldDllPath);
+        var reachability = new ReachabilityAnalyzer(set).Analyze();
+
+        using var reader = new AssemblyReader(_fixture.HelloWorldDllPath);
+        var builder = new IRBuilder(reader);
+        var module = builder.Build(set, reachability);
+
+        Assert.NotNull(module);
+        Assert.Equal("HelloWorld", module.Name);
+        Assert.NotEmpty(module.Types);
+    }
+
+    [Fact]
+    public void Build_MultiAssembly_HelloWorld_SetsSourceKind()
+    {
+        using var set = new AssemblySet(_fixture.HelloWorldDllPath);
+        var reachability = new ReachabilityAnalyzer(set).Analyze();
+
+        using var reader = new AssemblyReader(_fixture.HelloWorldDllPath);
+        var builder = new IRBuilder(reader);
+        var module = builder.Build(set, reachability);
+
+        var programType = module.FindType("Program");
+        Assert.NotNull(programType);
+        Assert.Equal(AssemblyKind.User, programType!.SourceKind);
+    }
+
+    [Fact]
+    public void Build_MultiAssembly_HelloWorld_MarksRuntimeProvided()
+    {
+        using var set = new AssemblySet(_fixture.HelloWorldDllPath);
+        var reachability = new ReachabilityAnalyzer(set).Analyze();
+
+        using var reader = new AssemblyReader(_fixture.HelloWorldDllPath);
+        var builder = new IRBuilder(reader);
+        var module = builder.Build(set, reachability);
+
+        // User types should NOT be runtime-provided
+        var programType = module.FindType("Program");
+        Assert.NotNull(programType);
+        Assert.False(programType!.IsRuntimeProvided);
+    }
+
+    [Fact]
+    public void Build_MultiAssembly_MultiAssemblyTest_CrossAssemblyTypes()
+    {
+        using var set = new AssemblySet(_fixture.MultiAssemblyTestDllPath);
+        var reachability = new ReachabilityAnalyzer(set).Analyze();
+
+        using var reader = new AssemblyReader(_fixture.MultiAssemblyTestDllPath);
+        var builder = new IRBuilder(reader);
+        var module = builder.Build(set, reachability);
+
+        // Should have types from both assemblies
+        Assert.Contains(module.Types, t => t.Name == "Program");
+        Assert.Contains(module.Types, t => t.Name == "MathUtils");
+    }
+
+    [Fact]
+    public void Build_MultiAssembly_HasEntryPoint()
+    {
+        using var set = new AssemblySet(_fixture.HelloWorldDllPath);
+        var reachability = new ReachabilityAnalyzer(set).Analyze();
+
+        using var reader = new AssemblyReader(_fixture.HelloWorldDllPath);
+        var builder = new IRBuilder(reader);
+        var module = builder.Build(set, reachability);
+
+        Assert.NotNull(module.EntryPoint);
+    }
 }

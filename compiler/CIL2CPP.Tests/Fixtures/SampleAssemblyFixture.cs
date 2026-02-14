@@ -12,6 +12,8 @@ public class SampleAssemblyFixture : IDisposable
     public string HelloWorldDllPath { get; }
     public string ArrayTestDllPath { get; }
     public string FeatureTestDllPath { get; }
+    public string MultiAssemblyTestDllPath { get; }
+    public string MathLibDllPath { get; }
     public string SolutionRoot { get; }
 
     public SampleAssemblyFixture()
@@ -21,10 +23,12 @@ public class SampleAssemblyFixture : IDisposable
         var helloWorldProj = Path.Combine(SolutionRoot, "compiler", "samples", "HelloWorld", "HelloWorld.csproj");
         var arrayTestProj = Path.Combine(SolutionRoot, "compiler", "samples", "ArrayTest", "ArrayTest.csproj");
         var featureTestProj = Path.Combine(SolutionRoot, "compiler", "samples", "FeatureTest", "FeatureTest.csproj");
+        var multiAssemblyTestProj = Path.Combine(SolutionRoot, "compiler", "samples", "MultiAssemblyTest", "MultiAssemblyTest.csproj");
 
         EnsureBuilt(helloWorldProj);
         EnsureBuilt(arrayTestProj);
         EnsureBuilt(featureTestProj);
+        EnsureBuilt(multiAssemblyTestProj); // Also builds MathLib as ProjectReference
 
         HelloWorldDllPath = Path.Combine(SolutionRoot,
             "compiler", "samples", "HelloWorld", "bin", "Debug", "net8.0", "HelloWorld.dll");
@@ -32,6 +36,10 @@ public class SampleAssemblyFixture : IDisposable
             "compiler", "samples", "ArrayTest", "bin", "Debug", "net8.0", "ArrayTest.dll");
         FeatureTestDllPath = Path.Combine(SolutionRoot,
             "compiler", "samples", "FeatureTest", "bin", "Debug", "net8.0", "FeatureTest.dll");
+        MultiAssemblyTestDllPath = Path.Combine(SolutionRoot,
+            "compiler", "samples", "MultiAssemblyTest", "bin", "Debug", "net8.0", "MultiAssemblyTest.dll");
+        MathLibDllPath = Path.Combine(SolutionRoot,
+            "compiler", "samples", "MultiAssemblyTest", "bin", "Debug", "net8.0", "MathLib.dll");
 
         if (!File.Exists(HelloWorldDllPath))
             throw new InvalidOperationException($"HelloWorld.dll not found at {HelloWorldDllPath}");
@@ -39,6 +47,10 @@ public class SampleAssemblyFixture : IDisposable
             throw new InvalidOperationException($"ArrayTest.dll not found at {ArrayTestDllPath}");
         if (!File.Exists(FeatureTestDllPath))
             throw new InvalidOperationException($"FeatureTest.dll not found at {FeatureTestDllPath}");
+        if (!File.Exists(MultiAssemblyTestDllPath))
+            throw new InvalidOperationException($"MultiAssemblyTest.dll not found at {MultiAssemblyTestDllPath}");
+        if (!File.Exists(MathLibDllPath))
+            throw new InvalidOperationException($"MathLib.dll not found at {MathLibDllPath}");
     }
 
     private static void EnsureBuilt(string csprojPath)

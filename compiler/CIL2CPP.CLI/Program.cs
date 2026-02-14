@@ -57,15 +57,23 @@ class Program
             description: "Build configuration (Debug or Release)");
         codegenConfigOption.AddAlias("-c");
 
+        var codegenMultiOption = new Option<bool>(
+            name: "--multi-assembly",
+            getDefaultValue: () => false,
+            description: "Enable multi-assembly mode (load referenced assemblies, tree shake)");
+
         var codegenCommand = new Command("codegen", "Generate C++ code from C# project (without compiling)")
         {
-            codegenInputOption, codegenOutputOption, codegenConfigOption
+            codegenInputOption, codegenOutputOption, codegenConfigOption, codegenMultiOption
         };
 
-        codegenCommand.SetHandler((input, output, config) =>
+        codegenCommand.SetHandler((input, output, config, multi) =>
         {
-            GenerateCpp(input, output, config);
-        }, codegenInputOption, codegenOutputOption, codegenConfigOption);
+            if (multi)
+                GenerateCppMultiAssembly(input, output, config);
+            else
+                GenerateCpp(input, output, config);
+        }, codegenInputOption, codegenOutputOption, codegenConfigOption, codegenMultiOption);
 
         rootCommand.AddCommand(codegenCommand);
 
@@ -154,7 +162,12 @@ class Program
             $"Expected: {Path.Combine(projectDir, "bin", "*", "net*", $"{assemblyName}.dll")}");
     }
 
-    static void GenerateCpp(FileInfo input, DirectoryInfo output, string configName = "Release")
+    /// <summary>
+    /// Common setup: build the project, resolve output DLL, parse build config.
+    /// Returns null if setup fails (error already printed).
+    /// </summary>
+    static (FileInfo AssemblyFile, BuildConfiguration Config)? PrepareBuild(
+        FileInfo input, DirectoryInfo output, string configName)
     {
         FileInfo assemblyFile;
         try
@@ -164,7 +177,7 @@ class Program
         catch (Exception ex)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
-            return;
+            return null;
         }
 
         BuildConfiguration config;
@@ -175,31 +188,50 @@ class Program
         catch (ArgumentException ex)
         {
             Console.Error.WriteLine($"Error: {ex.Message}");
-            return;
+            return null;
         }
 
         output.Create();
+        return (assemblyFile, config);
+    }
+
+    static void PrintGeneratedFiles(GeneratedOutput generatedOutput)
+    {
+        Console.WriteLine($"      {generatedOutput.HeaderFile.FileName}");
+        Console.WriteLine($"      {generatedOutput.SourceFile.FileName}");
+        if (generatedOutput.MainFile != null)
+            Console.WriteLine($"      {generatedOutput.MainFile.FileName}");
+        if (generatedOutput.CMakeFile != null)
+            Console.WriteLine($"      {generatedOutput.CMakeFile.FileName}");
+    }
+
+    static void PrintBanner(FileInfo assemblyFile, DirectoryInfo output, BuildConfiguration config, string? modeSuffix = null)
+    {
+        var version = typeof(Program).Assembly.GetName().Version;
+        var modeLabel = modeSuffix != null ? $" ({modeSuffix})" : "";
+        Console.WriteLine($"CIL2CPP Code Generator v{version?.ToString(3) ?? "0.0.0"}{modeLabel}");
+        Console.WriteLine($"Input:  {assemblyFile.FullName}");
+        Console.WriteLine($"Output: {output.FullName}");
+        Console.WriteLine($"Config: {config.ConfigurationName}");
+        Console.WriteLine();
+    }
+
+    static void GenerateCpp(FileInfo input, DirectoryInfo output, string configName = "Release")
+    {
+        var prepared = PrepareBuild(input, output, configName);
+        if (prepared is not var (assemblyFile, config)) return;
 
         try
         {
-            var version = typeof(Program).Assembly.GetName().Version;
-            Console.WriteLine($"CIL2CPP Code Generator v{version?.ToString(3) ?? "0.0.0"}");
-            Console.WriteLine($"Input:  {assemblyFile.FullName}");
-            Console.WriteLine($"Output: {output.FullName}");
-            Console.WriteLine($"Config: {config.ConfigurationName}");
-            Console.WriteLine();
+            PrintBanner(assemblyFile, output, config);
 
-            // Step 1: Read assembly (with debug symbols in Debug mode)
             Console.WriteLine("[1/3] Reading assembly...");
             using var reader = new AssemblyReader(assemblyFile.FullName, config);
             var types = reader.GetAllTypes().ToList();
             Console.WriteLine($"      Found {types.Count} types");
             if (config.IsDebug)
-            {
                 Console.WriteLine($"      Debug symbols: {(reader.HasSymbols ? "loaded" : "not available")}");
-            }
 
-            // Step 2: Build IR (with debug info in Debug mode)
             Console.WriteLine("[2/3] Building IR...");
             var builder = new IRBuilder(reader, config);
             var module = builder.Build();
@@ -209,22 +241,62 @@ class Program
             else
                 Console.WriteLine("      No entry point - generating static library");
 
-            // Step 3: Generate C++ (with debug annotations in Debug mode)
             Console.WriteLine("[3/3] Generating C++ code...");
             var generator = new CppCodeGenerator(module, config);
             var generatedOutput = generator.Generate();
             generatedOutput.WriteToDirectory(output.FullName);
-
-            Console.WriteLine($"      {generatedOutput.HeaderFile.FileName}");
-            Console.WriteLine($"      {generatedOutput.SourceFile.FileName}");
-            if (generatedOutput.MainFile != null)
-                Console.WriteLine($"      {generatedOutput.MainFile.FileName}");
-            if (generatedOutput.CMakeFile != null)
-                Console.WriteLine($"      {generatedOutput.CMakeFile.FileName}");
+            PrintGeneratedFiles(generatedOutput);
 
             Console.WriteLine();
             var outputType = module.EntryPoint != null ? "executable" : "static library";
             Console.WriteLine($"Code generation completed! ({config.ConfigurationName}, {outputType})");
+        }
+        catch (Exception ex)
+        {
+            Console.Error.WriteLine($"Error: {ex.Message}");
+            Console.Error.WriteLine(ex.StackTrace);
+        }
+    }
+
+    static void GenerateCppMultiAssembly(FileInfo input, DirectoryInfo output, string configName = "Release")
+    {
+        var prepared = PrepareBuild(input, output, configName);
+        if (prepared is not var (assemblyFile, config)) return;
+
+        try
+        {
+            PrintBanner(assemblyFile, output, config, "multi-assembly mode");
+
+            Console.WriteLine("[1/4] Loading assembly set...");
+            using var assemblySet = new AssemblySet(assemblyFile.FullName, config);
+            Console.WriteLine($"      Root assembly: {assemblySet.RootAssemblyName}");
+
+            Console.WriteLine("[2/4] Analyzing reachability...");
+            var analyzer = new ReachabilityAnalyzer(assemblySet);
+            var reachability = analyzer.Analyze();
+            Console.WriteLine($"      {reachability.ReachableTypes.Count} reachable types");
+            Console.WriteLine($"      {reachability.ReachableMethods.Count} reachable methods");
+            Console.WriteLine($"      {assemblySet.LoadedAssemblies.Count} assemblies loaded");
+
+            Console.WriteLine("[3/4] Building IR (multi-assembly)...");
+            using var reader = new AssemblyReader(assemblyFile.FullName, config);
+            var builder = new IRBuilder(reader, config);
+            var module = builder.Build(assemblySet, reachability);
+            Console.WriteLine($"      {module.Types.Count} types, {module.GetAllMethods().Count()} methods");
+            if (module.EntryPoint != null)
+                Console.WriteLine($"      Entry point: {module.EntryPoint.DeclaringType?.ILFullName}.{module.EntryPoint.Name}");
+            else
+                Console.WriteLine("      No entry point - generating static library");
+
+            Console.WriteLine("[4/4] Generating C++ code...");
+            var generator = new CppCodeGenerator(module, config);
+            var generatedOutput = generator.Generate();
+            generatedOutput.WriteToDirectory(output.FullName);
+            PrintGeneratedFiles(generatedOutput);
+
+            Console.WriteLine();
+            var outputType = module.EntryPoint != null ? "executable" : "static library";
+            Console.WriteLine($"Multi-assembly code generation completed! ({config.ConfigurationName}, {outputType})");
         }
         catch (Exception ex)
         {

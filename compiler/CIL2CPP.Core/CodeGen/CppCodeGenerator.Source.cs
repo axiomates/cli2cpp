@@ -64,16 +64,16 @@ public partial class CppCodeGenerator
             .Where(t => !CppNameMapper.IsCompilerGeneratedType(t.ILFullName))
             .ToList();
 
-        // Static field storage
+        // Static field storage (skip runtime-provided types)
         foreach (var type in userTypes)
         {
-            if (type.IsEnum || type.IsDelegate) continue;
+            if (type.IsEnum || type.IsDelegate || type.IsRuntimeProvided) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"{type.CppName}_Statics {type.CppName}_statics = {{}};");
             }
         }
-        if (userTypes.Any(t => !t.IsEnum && !t.IsDelegate && t.StaticFields.Count > 0))
+        if (userTypes.Any(t => !t.IsEnum && !t.IsDelegate && !t.IsRuntimeProvided && t.StaticFields.Count > 0))
         {
             sb.AppendLine();
         }
@@ -117,17 +117,19 @@ public partial class CppCodeGenerator
         // Finalizer wrappers
         EmitFinalizerWrappers(sb, userTypes);
 
-        // Type info definitions (all types including interfaces)
+        // Type info definitions (skip runtime-provided types — already defined in runtime)
         sb.AppendLine("// ===== Type Info =====");
         foreach (var type in userTypes)
         {
+            if (type.IsRuntimeProvided) continue;
             GenerateTypeInfo(sb, type);
         }
         sb.AppendLine();
 
-        // Static constructor guards
+        // Static constructor guards (skip runtime-provided types)
         foreach (var type in userTypes)
         {
+            if (type.IsRuntimeProvided) continue;
             if (type.HasCctor)
             {
                 var cctorMethod = type.Methods.FirstOrDefault(m => m.IsStaticConstructor);
@@ -145,11 +147,11 @@ public partial class CppCodeGenerator
             }
         }
 
-        // Method implementations
+        // Method implementations (skip runtime-provided types and InternalCall methods)
         sb.AppendLine("// ===== Method Implementations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsDelegate) continue;
+            if (type.IsInterface || type.IsDelegate || type.IsRuntimeProvided) continue;
 
             foreach (var method in type.Methods)
             {

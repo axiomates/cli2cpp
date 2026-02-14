@@ -14,6 +14,7 @@
 #include "type_info.h"
 #include "boxing.h"
 #include "delegate.h"
+#include "icall.h"
 
 // BCL types
 #include "bcl/System.Object.h"

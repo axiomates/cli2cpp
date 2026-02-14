@@ -185,10 +185,10 @@ public class ExceptionHandlerInfo
     private readonly Mono.Cecil.Cil.ExceptionHandler _handler;
 
     public Mono.Cecil.Cil.ExceptionHandlerType HandlerType => _handler.HandlerType;
-    public int TryStart => _handler.TryStart.Offset;
-    public int TryEnd => _handler.TryEnd.Offset;
-    public int HandlerStart => _handler.HandlerStart.Offset;
-    public int HandlerEnd => _handler.HandlerEnd.Offset;
+    public int TryStart => _handler.TryStart?.Offset ?? 0;
+    public int TryEnd => _handler.TryEnd?.Offset ?? int.MaxValue;
+    public int HandlerStart => _handler.HandlerStart?.Offset ?? 0;
+    public int HandlerEnd => _handler.HandlerEnd?.Offset ?? int.MaxValue;
     public string? CatchTypeName => _handler.CatchType?.FullName;
 
     public ExceptionHandlerInfo(Mono.Cecil.Cil.ExceptionHandler handler)

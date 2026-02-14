@@ -90,8 +90,22 @@ public partial class IRBuilder
 
         var irCall = new IRCall();
 
-        // Map known BCL methods
+        // Map known BCL methods (hardcoded priority mappings)
         var mappedName = MapBclMethod(methodRef);
+
+        // Fallback: ICall registry for [InternalCall] methods
+        if (mappedName == null)
+        {
+            var resolved = TryResolveMethodRef(methodRef);
+            if (resolved != null && (resolved.ImplAttributes & MethodImplAttributes.InternalCall) != 0)
+            {
+                mappedName = ICallRegistry.Lookup(
+                    methodRef.DeclaringType.FullName,
+                    methodRef.Name,
+                    methodRef.Parameters.Count);
+            }
+        }
+
         if (mappedName != null)
         {
             irCall.FunctionName = mappedName;
@@ -364,6 +378,22 @@ public partial class IRBuilder
         }
 
         return null;
+    }
+
+    /// <summary>
+    /// Try to resolve a MethodReference to its MethodDefinition.
+    /// Returns null if resolution fails (e.g., assembly not loaded).
+    /// </summary>
+    private static MethodDefinition? TryResolveMethodRef(MethodReference methodRef)
+    {
+        try
+        {
+            return methodRef.Resolve();
+        }
+        catch
+        {
+            return null;
+        }
     }
 
     private void BuildVTable(IRType irType)

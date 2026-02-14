@@ -20,6 +20,17 @@ public class AssemblyReader : IDisposable
     {
         var readSymbols = config?.ReadDebugSymbols ?? false;
 
+        // Create a resolver that probes the assembly's directory
+        var resolver = new CIL2CPPAssemblyResolver();
+        var assemblyDir = Path.GetDirectoryName(Path.GetFullPath(assemblyPath));
+        if (assemblyDir != null)
+            resolver.AddSearchDirectory(assemblyDir);
+
+        // Add .NET runtime directory for BCL resolution
+        var runtimeDir = RuntimeLocator.FindRuntimeDirectory(assemblyPath);
+        if (runtimeDir != null)
+            resolver.AddSearchDirectory(runtimeDir);
+
         if (readSymbols)
         {
             try
@@ -27,11 +38,13 @@ public class AssemblyReader : IDisposable
                 var readerParams = new ReaderParameters
                 {
                     ReadSymbols = true,
-                    ReadWrite = false
+                    ReadWrite = false,
+                    AssemblyResolver = resolver
                 };
                 _assembly = AssemblyDefinition.ReadAssembly(assemblyPath, readerParams);
                 _mainModule = _assembly.MainModule;
                 HasSymbols = true;
+                resolver.RegisterAssembly(_assembly);
                 return;
             }
             catch
@@ -44,11 +57,13 @@ public class AssemblyReader : IDisposable
         var fallbackParams = new ReaderParameters
         {
             ReadSymbols = false,
-            ReadWrite = false
+            ReadWrite = false,
+            AssemblyResolver = resolver
         };
         _assembly = AssemblyDefinition.ReadAssembly(assemblyPath, fallbackParams);
         _mainModule = _assembly.MainModule;
         HasSymbols = false;
+        resolver.RegisterAssembly(_assembly);
     }
 
     /// <summary>

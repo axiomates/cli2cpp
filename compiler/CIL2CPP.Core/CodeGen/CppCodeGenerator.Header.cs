@@ -22,19 +22,20 @@ public partial class CppCodeGenerator
             .Where(t => !CppNameMapper.IsCompilerGeneratedType(t.ILFullName))
             .ToList();
 
-        // Forward declarations (skip interfaces, enums, and delegates — no struct defs)
+        // Forward declarations (skip interfaces, enums, delegates, and runtime-provided types)
         sb.AppendLine("// ===== Forward Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsEnum || type.IsDelegate) continue;
+            if (type.IsInterface || type.IsEnum || type.IsDelegate || type.IsRuntimeProvided) continue;
             sb.AppendLine($"struct {type.CppName};");
         }
         sb.AppendLine();
 
-        // Type info declarations (includes interfaces for dispatch)
+        // Type info declarations (skip runtime-provided types — declared in runtime headers)
         sb.AppendLine("// ===== Type Info Declarations =====");
         foreach (var type in userTypes)
         {
+            if (type.IsRuntimeProvided) continue;
             sb.AppendLine($"extern cil2cpp::TypeInfo {type.CppName}_TypeInfo;");
         }
         // Primitive type TypeInfo declarations (for array element types)
@@ -44,10 +45,11 @@ public partial class CppCodeGenerator
         }
         sb.AppendLine();
 
-        // Struct definitions
+        // Struct definitions (skip runtime-provided types — already in runtime headers)
         sb.AppendLine("// ===== Type Definitions =====");
         foreach (var type in userTypes)
         {
+            if (type.IsRuntimeProvided) continue;
             if (type.IsInterface) continue;
             if (type.IsEnum)
             {
@@ -64,10 +66,10 @@ public partial class CppCodeGenerator
             GenerateStructDefinition(sb, type);
         }
 
-        // Static field storage declarations
+        // Static field storage declarations (skip runtime-provided types)
         foreach (var type in userTypes)
         {
-            if (type.IsEnum || type.IsDelegate) continue;
+            if (type.IsEnum || type.IsDelegate || type.IsRuntimeProvided) continue;
             if (type.StaticFields.Count > 0)
             {
                 sb.AppendLine($"// Static fields for {type.ILFullName}");
@@ -83,15 +85,15 @@ public partial class CppCodeGenerator
             }
         }
 
-        // Method declarations
+        // Method declarations (skip runtime-provided types and InternalCall methods)
         sb.AppendLine("// ===== Method Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsDelegate) continue;
+            if (type.IsInterface || type.IsDelegate || type.IsRuntimeProvided) continue;
 
             foreach (var method in type.Methods)
             {
-                if (method.IsAbstract) continue;
+                if (method.IsAbstract || method.IsInternalCall) continue;
                 sb.AppendLine($"{method.GetCppSignature()};");
             }
             sb.AppendLine();
