@@ -9,6 +9,7 @@
 #include <cil2cpp/array.h>
 #include <cil2cpp/type_info.h>
 #include <cil2cpp/gc.h>
+#include <cil2cpp/threading.h>
 
 #include <chrono>
 #include <cstring>
@@ -70,19 +71,49 @@ Object* Type_GetTypeFromHandle(void* handle) {
 }
 
 // ===== System.Threading.Monitor =====
-// Single-threaded stubs — no actual locking needed
 
 void Monitor_Enter(Object* obj) {
-    (void)obj;
+    monitor::enter(obj);
 }
 
 void Monitor_Exit(Object* obj) {
-    (void)obj;
+    monitor::exit(obj);
 }
 
 void Monitor_ReliableEnter(Object* obj, bool* lockTaken) {
-    (void)obj;
-    if (lockTaken) *lockTaken = true;
+    monitor::reliable_enter(obj, lockTaken);
+}
+
+bool Monitor_Wait(Object* obj, Int32 timeout_ms) {
+    return monitor::wait(obj, timeout_ms);
+}
+
+void Monitor_Pulse(Object* obj) {
+    monitor::pulse(obj);
+}
+
+void Monitor_PulseAll(Object* obj) {
+    monitor::pulse_all(obj);
+}
+
+// ===== System.Threading.Interlocked =====
+
+Int32 Interlocked_Increment_i32(Int32* location) { return interlocked::increment_i32(location); }
+Int32 Interlocked_Decrement_i32(Int32* location) { return interlocked::decrement_i32(location); }
+Int32 Interlocked_Exchange_i32(Int32* location, Int32 value) { return interlocked::exchange_i32(location, value); }
+Int32 Interlocked_CompareExchange_i32(Int32* location, Int32 value, Int32 comparand) { return interlocked::compare_exchange_i32(location, value, comparand); }
+Int32 Interlocked_Add_i32(Int32* location, Int32 value) { return interlocked::add_i32(location, value); }
+Int64 Interlocked_Increment_i64(Int64* location) { return interlocked::increment_i64(location); }
+Int64 Interlocked_Decrement_i64(Int64* location) { return interlocked::decrement_i64(location); }
+Int64 Interlocked_Exchange_i64(Int64* location, Int64 value) { return interlocked::exchange_i64(location, value); }
+Int64 Interlocked_CompareExchange_i64(Int64* location, Int64 value, Int64 comparand) { return interlocked::compare_exchange_i64(location, value, comparand); }
+Object* Interlocked_Exchange_obj(Object** location, Object* value) { return interlocked::exchange_obj(location, value); }
+Object* Interlocked_CompareExchange_obj(Object** location, Object* value, Object* comparand) { return interlocked::compare_exchange_obj(location, value, comparand); }
+
+// ===== System.Threading.Thread =====
+
+void Thread_Sleep(Int32 milliseconds) {
+    thread::sleep(milliseconds);
 }
 
 // ===== System.Runtime.CompilerServices.RuntimeHelpers =====

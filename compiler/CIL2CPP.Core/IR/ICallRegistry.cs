@@ -48,10 +48,19 @@ public static class ICallRegistry
         // System.Type
         Register("System.Type", "GetTypeFromHandle", 1, "cil2cpp::icall::Type_GetTypeFromHandle");
 
-        // System.Threading.Monitor (no-op stubs for single-threaded compilation)
+        // System.Threading.Monitor
         Register("System.Threading.Monitor", "Enter", 1, "cil2cpp::icall::Monitor_Enter");
         Register("System.Threading.Monitor", "Exit", 1, "cil2cpp::icall::Monitor_Exit");
         Register("System.Threading.Monitor", "ReliableEnter", 2, "cil2cpp::icall::Monitor_ReliableEnter");
+        Register("System.Threading.Monitor", "Wait", 2, "cil2cpp::icall::Monitor_Wait");
+        Register("System.Threading.Monitor", "Pulse", 1, "cil2cpp::icall::Monitor_Pulse");
+        Register("System.Threading.Monitor", "PulseAll", 1, "cil2cpp::icall::Monitor_PulseAll");
+
+        // Note: System.Threading.Interlocked methods are handled by MapBclMethod()
+        // which dispatches overloads based on parameter types (i32 vs i64 vs Object).
+
+        // System.Threading.Thread
+        Register("System.Threading.Thread", "Sleep", 1, "cil2cpp::icall::Thread_Sleep");
 
         // System.Runtime.CompilerServices.RuntimeHelpers
         Register("System.Runtime.CompilerServices.RuntimeHelpers", "InitializeArray", 2,

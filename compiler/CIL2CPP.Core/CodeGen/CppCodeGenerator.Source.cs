@@ -23,6 +23,7 @@ public partial class CppCodeGenerator
         sb.AppendLine("#include <cstring>");
         sb.AppendLine("#include <algorithm>");
         sb.AppendLine("#include <limits>");
+        sb.AppendLine("#include <atomic>");
         sb.AppendLine();
 
         // String literals
@@ -344,7 +345,7 @@ public partial class CppCodeGenerator
         bool any = false;
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsDelegate || type.VTable.Count == 0) continue;
+            if (type.IsInterface || type.IsDelegate || type.IsRuntimeProvided || type.VTable.Count == 0) continue;
             if (!any)
             {
                 sb.AppendLine("// ===== VTable Data =====");

@@ -20,6 +20,7 @@ namespace gc {
 
 void init(const GCConfig&) {
     GC_INIT();
+    GC_allow_register_threads();
 }
 
 void shutdown() {
@@ -82,6 +83,16 @@ void* alloc_array(TypeInfo* element_type, size_t length) {
 
 void collect() {
     GC_gcollect();
+}
+
+void register_thread() {
+    struct GC_stack_base sb;
+    GC_get_stack_base(&sb);
+    GC_register_my_thread(&sb);
+}
+
+void unregister_thread() {
+    GC_unregister_my_thread();
 }
 
 void add_root(void**) {

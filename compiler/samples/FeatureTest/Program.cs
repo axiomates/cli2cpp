@@ -1,4 +1,5 @@
 using System;
+using System.Threading;
 using System.Threading.Tasks;
 
 // Base class with virtual methods (exercises callvirt, vtable)
@@ -1881,5 +1882,75 @@ public class Program
         // Helper method that uses Range parameter
         int len = IndexRangeHelper.SliceLength(10, 2..8);
         Console.WriteLine(len);  // 6
+    }
+
+    // ===== Threading Tests =====
+
+    // Exercises lock statement (Monitor.Enter/Exit + try-finally)
+    static void TestLock()
+    {
+        object lockObj = new object();
+        int counter = 0;
+        lock (lockObj) { counter++; }
+        Console.WriteLine(counter);  // 1
+    }
+
+    // Exercises Thread creation, Start, Join
+    static void TestThread()
+    {
+        int result = 0;
+        Thread t = new Thread(() => { result = 42; });
+        t.Start();
+        t.Join();
+        Console.WriteLine(result);  // 42
+    }
+
+    // Exercises atomic operations
+    static void TestInterlocked()
+    {
+        int val = 0;
+        Interlocked.Increment(ref val);
+        Console.WriteLine(val);  // 1
+        int old = Interlocked.CompareExchange(ref val, 100, 1);
+        Console.WriteLine(old);  // 1
+        Console.WriteLine(val);  // 100
+    }
+
+    // Exercises Thread.Sleep
+    static void TestThreadSleep()
+    {
+        Thread.Sleep(1);
+        Console.WriteLine("Slept");
+    }
+
+    // Exercises Monitor.Wait/Pulse
+    static void TestMonitorWaitPulse()
+    {
+        object sync = new object();
+        bool signaled = false;
+        Thread t = new Thread(() =>
+        {
+            lock (sync)
+            {
+                signaled = true;
+                Monitor.Pulse(sync);
+            }
+        });
+        lock (sync)
+        {
+            t.Start();
+            while (!signaled)
+                Monitor.Wait(sync);
+        }
+        t.Join();
+        Console.WriteLine(signaled);  // True
+    }
+
+    // Exercises 64-bit atomics
+    static void TestInterlockedLong()
+    {
+        long val = 0;
+        Interlocked.Increment(ref val);
+        Console.WriteLine(val);  // 1
     }
 }

@@ -99,6 +99,7 @@ public partial class IRBuilder
     /// </summary>
     private void ConvertMethodBody(IL.MethodInfo methodDef, IRMethod irMethod)
     {
+        _pendingVolatile = false; // Reset between methods
         var block = new IRBasicBlock { Id = 0 };
         irMethod.BasicBlocks.Add(block);
 
@@ -625,6 +626,12 @@ public partial class IRBuilder
             {
                 var fieldRef = (FieldReference)instr.Operand!;
                 var obj = stack.Count > 0 ? stack.Pop() : "__this";
+                // volatile. prefix: fence before load
+                if (_pendingVolatile)
+                {
+                    block.Instructions.Add(new IRRawCpp { Code = "std::atomic_thread_fence(std::memory_order_seq_cst);" });
+                    _pendingVolatile = false;
+                }
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRFieldAccess
                 {
@@ -641,6 +648,8 @@ public partial class IRBuilder
                 var fieldRef = (FieldReference)instr.Operand!;
                 var val = stack.Count > 0 ? stack.Pop() : "0";
                 var obj = stack.Count > 0 ? stack.Pop() : "__this";
+                bool isVolatileStore = _pendingVolatile;
+                _pendingVolatile = false;
                 block.Instructions.Add(new IRFieldAccess
                 {
                     ObjectExpr = obj,
@@ -648,6 +657,11 @@ public partial class IRBuilder
                     IsStore = true,
                     StoreValue = val,
                 });
+                // volatile. prefix: fence after store
+                if (isVolatileStore)
+                {
+                    block.Instructions.Add(new IRRawCpp { Code = "std::atomic_thread_fence(std::memory_order_seq_cst);" });
+                }
                 break;
             }
 
@@ -657,6 +671,12 @@ public partial class IRBuilder
                 var typeCppName = GetMangledTypeNameForRef(fieldRef.DeclaringType);
                 var fieldCacheKey = ResolveCacheKey(fieldRef.DeclaringType);
                 EmitCctorGuardIfNeeded(block, fieldCacheKey, typeCppName);
+                // volatile. prefix: fence before load
+                if (_pendingVolatile)
+                {
+                    block.Instructions.Add(new IRRawCpp { Code = "std::atomic_thread_fence(std::memory_order_seq_cst);" });
+                    _pendingVolatile = false;
+                }
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRStaticFieldAccess
                 {
@@ -675,6 +695,8 @@ public partial class IRBuilder
                 var fieldCacheKey = ResolveCacheKey(fieldRef.DeclaringType);
                 EmitCctorGuardIfNeeded(block, fieldCacheKey, typeCppName);
                 var val = stack.Count > 0 ? stack.Pop() : "0";
+                bool isVolatileStore = _pendingVolatile;
+                _pendingVolatile = false;
                 block.Instructions.Add(new IRStaticFieldAccess
                 {
                     TypeCppName = typeCppName,
@@ -682,6 +704,11 @@ public partial class IRBuilder
                     IsStore = true,
                     StoreValue = val,
                 });
+                // volatile. prefix: fence after store
+                if (isVolatileStore)
+                {
+                    block.Instructions.Add(new IRRawCpp { Code = "std::atomic_thread_fence(std::memory_order_seq_cst);" });
+                }
                 break;
             }
 
@@ -906,7 +933,9 @@ public partial class IRBuilder
             case Code.Constrained:  // constrained. prefix: monomorphization resolves concrete types
             case Code.Tail:         // tail. prefix: tail call hint, not required for correctness
             case Code.Readonly:     // readonly. prefix: ldelema advisory, no semantic effect
-            case Code.Volatile:     // volatile. prefix: memory ordering hint
+            case Code.Volatile:     // volatile. prefix: emit memory fence on next field access
+                _pendingVolatile = true;
+                break;
             case Code.Unaligned:    // unaligned. prefix: alignment hint
                 break;
 

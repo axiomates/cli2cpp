@@ -3284,4 +3284,137 @@ public class IRBuilderTests
         Assert.Contains(rawCpps, c => c.Contains("f__start"));
         Assert.Contains(rawCpps, c => c.Contains("f__end"));
     }
+
+    // ===== Threading Tests =====
+
+    [Fact]
+    public void Build_FeatureTest_TestLock_HasMonitorEnterExit()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestLock");
+        var calls = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        // lock statement generates Monitor.ReliableEnter + Monitor.Exit
+        Assert.Contains(calls, c => c.Contains("Monitor_ReliableEnter") || c.Contains("Monitor_Enter"));
+        Assert.Contains(calls, c => c.Contains("Monitor_Exit"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestLock_NoWarnings()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestLock");
+        var allInstructions = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .ToList();
+        // No WARNING comments
+        var warnings = allInstructions.OfType<IRComment>()
+            .Where(c => c.Text.Contains("WARNING"))
+            .ToList();
+        Assert.Empty(warnings);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestThread_HasThreadCreate()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestThread");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        // Thread interception should produce thread::create and thread::start
+        Assert.Contains(rawCpps, c => c.Contains("thread::create"));
+        Assert.Contains(rawCpps, c => c.Contains("thread::start"));
+        Assert.Contains(rawCpps, c => c.Contains("thread::join"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestInterlocked_HasAtomicCalls()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestInterlocked");
+        var calls = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        // Interlocked.Increment → Interlocked_Increment_i32
+        Assert.Contains(calls, c => c.Contains("Interlocked_Increment"));
+        // Interlocked.CompareExchange → Interlocked_CompareExchange_i32
+        Assert.Contains(calls, c => c.Contains("Interlocked_CompareExchange"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestInterlockedLong_HasI64Calls()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestInterlockedLong");
+        var calls = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        // Interlocked.Increment(ref long) → Interlocked_Increment_i64
+        Assert.Contains(calls, c => c.Contains("Interlocked_Increment_i64"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestThreadSleep_HasSleep()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestThreadSleep");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        // Thread.Sleep → thread::sleep
+        Assert.Contains(rawCpps, c => c.Contains("thread::sleep"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestMonitorWaitPulse_HasMonitorWaitPulse()
+    {
+        var module = BuildFeatureTest();
+        // Check main method has Monitor.Wait
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestMonitorWaitPulse");
+        var calls = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        Assert.Contains(calls, c => c.Contains("Monitor_Wait"));
+
+        // Monitor.Pulse is in the lambda closure — check all types for it
+        var allCalls = module.Types
+            .SelectMany(t => t.Methods)
+            .SelectMany(m => m.BasicBlocks)
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        Assert.Contains(allCalls, c => c.Contains("Monitor_Pulse"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_ThreadSyntheticType_Exists()
+    {
+        var module = BuildFeatureTest();
+        var threadType = module.Types.FirstOrDefault(t => t.ILFullName == "System.Threading.Thread");
+        Assert.NotNull(threadType);
+        Assert.True(threadType.IsRuntimeProvided);
+        Assert.Equal("cil2cpp::ManagedThread", threadType.CppName);
+    }
 }

@@ -1,5 +1,8 @@
 @PACKAGE_INIT@
 
+include(CMakeFindDependencyMacro)
+find_dependency(Threads)
+
 # BoehmGC - create imported target for the bundled gc library
 if(NOT TARGET BDWgc::gc)
     find_library(_CIL2CPP_GC_LIB gc PATHS "${PACKAGE_PREFIX_DIR}/lib" NO_DEFAULT_PATH)

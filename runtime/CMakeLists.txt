@@ -61,6 +61,9 @@ set(RUNTIME_SOURCES
     src/bcl/System.Delegate.cpp
     src/icall/icall.cpp
     src/async/task.cpp
+    src/threading/monitor.cpp
+    src/threading/interlocked.cpp
+    src/threading/thread.cpp
 )
 
 # Create static library
@@ -85,7 +88,8 @@ target_include_directories(cil2cpp_runtime
 # BoehmGC — PRIVATE dep, installed separately for consumers
 target_link_libraries(cil2cpp_runtime PRIVATE gc)
 # GC_NOT_DLL: tell bdwgc headers we link statically (prevents __declspec(dllimport))
-target_compile_definitions(cil2cpp_runtime PRIVATE GC_NOT_DLL)
+# GC_THREADS: enable multi-thread support in BoehmGC (GC_register_my_thread, etc.)
+target_compile_definitions(cil2cpp_runtime PRIVATE GC_NOT_DLL GC_THREADS)
 
 # Platform-specific settings
 if(WIN32)
@@ -94,9 +98,11 @@ if(WIN32)
     target_link_libraries(cil2cpp_runtime PUBLIC $<$<CONFIG:Debug>:dbghelp>)
 else()
     target_compile_definitions(cil2cpp_runtime PRIVATE CIL2CPP_POSIX)
-    find_package(Threads REQUIRED)
-    target_link_libraries(cil2cpp_runtime PUBLIC Threads::Threads)
 endif()
+
+# Threads — PUBLIC so consumers link it transitively (needed for std::thread, Monitor, etc.)
+find_package(Threads REQUIRED)
+target_link_libraries(cil2cpp_runtime PUBLIC Threads::Threads)
 
 # Compiler warnings
 if(MSVC)

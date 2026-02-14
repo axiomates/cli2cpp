@@ -37,12 +37,16 @@ public partial class IRBuilder
         "System.Runtime.CompilerServices.TaskAwaiter",
         "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
         "System.Runtime.CompilerServices.IAsyncStateMachine",
+        "System.Threading.Thread",
     };
 
     private readonly AssemblyReader _reader;
     private readonly IRModule _module;
     private readonly BuildConfiguration _config;
     private readonly Dictionary<string, IRType> _typeCache = new();
+
+    // volatile. prefix flag — set by Code.Volatile, consumed by next field access
+    private bool _pendingVolatile;
 
     // Multi-assembly mode fields (null in single-assembly mode)
     private AssemblySet? _assemblySet;
@@ -151,6 +155,9 @@ public partial class IRBuilder
 
         // Pass 1.5a: Create synthetic types for BCL value types (Index, Range)
         CreateIndexRangeSyntheticTypes();
+
+        // Pass 1.5b: Create synthetic type for System.Threading.Thread (reference type)
+        CreateThreadSyntheticType();
 
         // Pass 1.5: Create specialized types for each generic instantiation
         CreateGenericSpecializations();

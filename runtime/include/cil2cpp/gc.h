@@ -48,6 +48,19 @@ void* alloc_array(TypeInfo* element_type, size_t length);
 void collect();
 
 /**
+ * Register the current thread with the GC.
+ * Must be called at the start of every managed thread (except the main thread).
+ * Required for BoehmGC to scan the thread's stack for roots.
+ */
+void register_thread();
+
+/**
+ * Unregister the current thread from the GC.
+ * Must be called before a managed thread exits.
+ */
+void unregister_thread();
+
+/**
  * Add a root reference (no-op -BoehmGC scans roots automatically).
  */
 void add_root(void** root);

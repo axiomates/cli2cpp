@@ -67,6 +67,10 @@ public partial class IRBuilder
         if (TryEmitGetSubArray(block, stack, methodRef, ref tempCounter))
             return;
 
+        // Special: System.Threading.Thread methods
+        if (TryEmitThreadCall(block, stack, methodRef, ref tempCounter))
+            return;
+
         // Special: Delegate.Invoke — emit IRDelegateInvoke instead of normal call
         var declaringCacheKey = ResolveCacheKey(methodRef.DeclaringType);
         if (methodRef.Name == "Invoke" && methodRef.HasThis
@@ -285,6 +289,10 @@ public partial class IRBuilder
         if (TryEmitRangeNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
+        // Special: System.Threading.Thread constructor
+        if (TryEmitThreadNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
         var cacheKey = ResolveCacheKey(ctorRef.DeclaringType);
         var typeCpp = GetMangledTypeNameForRef(ctorRef.DeclaringType);
         var tmp = $"__t{tempCounter++}";
@@ -432,7 +440,60 @@ public partial class IRBuilder
             };
         }
 
+        // Monitor methods — managed wrappers for InternalCall, need direct mapping
+        if (fullType == "System.Threading.Monitor")
+        {
+            return name switch
+            {
+                "Enter" => "cil2cpp::icall::Monitor_Enter",
+                "Exit" => "cil2cpp::icall::Monitor_Exit",
+                "ReliableEnter" => "cil2cpp::icall::Monitor_ReliableEnter",
+                "Wait" => "cil2cpp::icall::Monitor_Wait",
+                "Pulse" => "cil2cpp::icall::Monitor_Pulse",
+                "PulseAll" => "cil2cpp::icall::Monitor_PulseAll",
+                _ => null
+            };
+        }
+
+        // Interlocked methods — dispatched by parameter type for overloads
+        if (fullType == "System.Threading.Interlocked")
+        {
+            return MapInterlockedMethod(methodRef);
+        }
+
         return null;
+    }
+
+    /// <summary>
+    /// Map Interlocked method calls to the correct typed C++ icall.
+    /// Overloads are distinguished by the first parameter's element type (ref int vs ref long vs ref object).
+    /// </summary>
+    private static string? MapInterlockedMethod(MethodReference methodRef)
+    {
+        var name = methodRef.Name;
+        // Determine type suffix from the first parameter (which is always a ref/byref)
+        var firstParam = methodRef.Parameters.Count > 0 ? methodRef.Parameters[0].ParameterType : null;
+        // Strip ByReference wrapper: "System.Int32&" → "System.Int32"
+        var elemTypeName = firstParam?.FullName.TrimEnd('&') ?? "";
+
+        var suffix = elemTypeName switch
+        {
+            "System.Int32" => "_i32",
+            "System.Int64" => "_i64",
+            "System.Object" => "_obj",
+            _ => null
+        };
+        if (suffix == null) return null;
+
+        return name switch
+        {
+            "Increment" => $"cil2cpp::icall::Interlocked_Increment{suffix}",
+            "Decrement" => $"cil2cpp::icall::Interlocked_Decrement{suffix}",
+            "Exchange" => $"cil2cpp::icall::Interlocked_Exchange{suffix}",
+            "CompareExchange" => $"cil2cpp::icall::Interlocked_CompareExchange{suffix}",
+            "Add" when suffix is "_i32" => "cil2cpp::icall::Interlocked_Add_i32",
+            _ => null
+        };
     }
 
     /// <summary>
