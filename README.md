@@ -462,7 +462,7 @@ void Program_Main() {
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| async / await | ❌ | 需要委托 + 泛型 + 异常处理 + 状态机 |
+| async / await | ⚠️ | 同步执行模型（Task 立即完成），支持 `Task<T>` + `await`，不支持真正并发 |
 | 多线程 (Thread, Task, lock) | ❌ | |
 | 反射 (Type.GetMethods 等) | ❌ | TypeInfo 有 MethodInfo/FieldInfo 数组但未填充 |
 | 特性 (Attribute) | ❌ | |
@@ -497,7 +497,7 @@ void Program_Main() {
 |------|------|---------|
 | `Span<T>` / `Memory<T>` / `ref struct` | 需要 byref 语义和栈分配支持 | Phase 5 |
 | 多维数组 (`T[,]`) | 仅支持一维数组 (`T[]`)，多维数组需要不同的内存布局 | Phase 5 |
-| `async` / `await` | 需要状态机生成 + `Task<T>` BCL 翻译 | Phase 5 |
+| `async` / `await` 真正并发 | 同步执行模型已实现，不支持 `Task.Delay`/`WhenAll`/`ValueTask` | Phase 5 |
 | 多线程 (`Thread`, `Task`, `lock`) | `Monitor.Enter/Exit` 当前为空操作 stub，需要真正的同步原语 | Phase 5 |
 | 反射 (`Type.GetMethods` 等) | TypeInfo 结构已有 MethodInfo/FieldInfo 数组但尚未填充 | Phase 5 |
 | 特性 (`Attribute`) | 元数据存储和运行时查询 | Phase 5 |
@@ -656,7 +656,7 @@ Phase 1-3 (单程序集):                   Phase 4+ (多程序集):
 
 | 功能 | 说明 |
 |------|------|
-| **async / await** | 状态机生成，Task\<T\>，需要委托 + 泛型 + 异常处理 |
+| **async / await** | ⚠️ 同步执行模型已实现（Task 立即完成），支持 `Task<T>` / `await`；不支持真正并发 |
 | **多线程** | Thread、Task、Monitor、lock 语句；需要多线程安全的 GC |
 | **反射** | 填充 MethodInfo / FieldInfo 数组，Type.GetMethods、Invoke |
 | **特性 (Attribute)** | 元数据存储和运行时查询 |
@@ -743,7 +743,7 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 
 | 模块 | 测试数 |
 |------|--------|
-| IRBuilder | 235 |
+| IRBuilder | 241 |
 | ILInstructionCategory | 159 |
 | CppNameMapper | 100 |
 | CppCodeGenerator | 70 |
@@ -762,7 +762,7 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 | AssemblyReader | 12 |
 | IRField / IRVTableEntry / IRInterfaceImpl | 7 |
 | SequencePointInfo | 5 |
-| **合计** | **975** |
+| **合计** | **981** |
 
 ### 运行时单元测试 (C++ / Google Test)
 
@@ -833,7 +833,7 @@ python tools/dev.py build                  # 编译 compiler + runtime
 python tools/dev.py build --compiler       # 仅编译 compiler
 python tools/dev.py build --runtime        # 仅编译 runtime
 python tools/dev.py test --all             # 运行全部测试（编译器 + 运行时 + 集成）
-python tools/dev.py test --compiler        # 仅编译器测试 (975 xUnit)
+python tools/dev.py test --compiler        # 仅编译器测试 (981 xUnit)
 python tools/dev.py test --runtime         # 仅运行时测试 (249 GTest)
 python tools/dev.py test --coverage        # 测试 + 覆盖率 HTML 报告
 python tools/dev.py install                # 安装 runtime (Debug + Release)

@@ -1,4 +1,5 @@
 using System;
+using System.Threading.Tasks;
 
 // Base class with virtual methods (exercises callvirt, vtable)
 public class Animal
@@ -412,6 +413,7 @@ public class Program
         TestValueTuple();
         TestRecord();
         TestRecordStruct();
+        TestAsync();
     }
 
     static void TestArithmetic()
@@ -1185,5 +1187,19 @@ public class Program
 
         var p3 = new PointRecord(30, 40);
         Console.WriteLine(p1 == p3);    // False
+    }
+
+    // Async helper: simple async method returning Task<int>
+    static async Task<int> ComputeAsync(int x)
+    {
+        await Task.CompletedTask;
+        return x * 2;
+    }
+
+    // Exercises async/await (state machine + Task<T> + AsyncTaskMethodBuilder)
+    static void TestAsync()
+    {
+        var task = ComputeAsync(21);
+        Console.WriteLine(task.Result);  // 42
     }
 }

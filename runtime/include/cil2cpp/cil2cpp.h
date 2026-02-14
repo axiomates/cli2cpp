@@ -16,6 +16,7 @@
 #include "delegate.h"
 #include "icall.h"
 #include "checked.h"
+#include "task.h"
 
 // BCL types
 #include "bcl/System.Object.h"

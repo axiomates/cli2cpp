@@ -2334,4 +2334,98 @@ public class IRBuilderTests
         // record struct doesn't have <Clone>$ method
         Assert.Null(cloneMethod);
     }
+
+    // ===== Async/Await =====
+
+    [Fact]
+    public void Build_FeatureTest_Async_StateMachineCompiled()
+    {
+        var module = BuildFeatureTest();
+        // C# compiler generates a state machine type for async methods
+        // Name pattern: <ComputeAsync>d__N (class in Debug, struct in Release)
+        var stateMachine = module.Types.FirstOrDefault(t =>
+            t.Name.Contains("ComputeAsync") && t.Name.Contains("d__"));
+        Assert.NotNull(stateMachine);
+        // Should have MoveNext method
+        var moveNext = stateMachine!.Methods.FirstOrDefault(m => m.Name == "MoveNext");
+        Assert.NotNull(moveNext);
+        Assert.True(moveNext!.BasicBlocks.Count > 0, "MoveNext should have body");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Async_MoveNextNoUnresolvedBuilderCalls()
+    {
+        var module = BuildFeatureTest();
+        var stateMachine = module.Types.FirstOrDefault(t =>
+            t.Name.Contains("ComputeAsync") && t.Name.Contains("d__"));
+        Assert.NotNull(stateMachine);
+        var moveNext = stateMachine!.Methods.First(m => m.Name == "MoveNext");
+        var allInstructions = moveNext.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        // No unresolved calls to AsyncTaskMethodBuilder
+        var builderCalls = allInstructions.OfType<IRCall>()
+            .Where(c => c.FunctionName.Contains("AsyncTaskMethodBuilder"))
+            .ToList();
+        Assert.Empty(builderCalls);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Async_MoveNextNoUnresolvedAwaiterCalls()
+    {
+        var module = BuildFeatureTest();
+        var stateMachine = module.Types.FirstOrDefault(t =>
+            t.Name.Contains("ComputeAsync") && t.Name.Contains("d__"));
+        Assert.NotNull(stateMachine);
+        var moveNext = stateMachine!.Methods.First(m => m.Name == "MoveNext");
+        var allInstructions = moveNext.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        // No unresolved calls to TaskAwaiter
+        var awaiterCalls = allInstructions.OfType<IRCall>()
+            .Where(c => c.FunctionName.Contains("TaskAwaiter"))
+            .ToList();
+        Assert.Empty(awaiterCalls);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Async_MoveNextCallsExist()
+    {
+        var module = BuildFeatureTest();
+        var stateMachine = module.Types.FirstOrDefault(t =>
+            t.Name.Contains("ComputeAsync") && t.Name.Contains("d__"));
+        Assert.NotNull(stateMachine);
+        var moveNext = stateMachine!.Methods.First(m => m.Name == "MoveNext");
+        var allInstructions = moveNext.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        // Should have IRRawCpp instructions for intercepted builder/awaiter calls
+        var rawCpp = allInstructions.OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Count > 0, "MoveNext should have inline C++ from intercepted calls");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Async_TaskTMonomorphized()
+    {
+        var module = BuildFeatureTest();
+        // Task<int> should be monomorphized as a generic instance
+        // Match specifically Task`1 (not TaskAwaiter or AsyncTaskMethodBuilder)
+        var taskInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance
+            && t.ILFullName.StartsWith("System.Threading.Tasks.Task`1"));
+        Assert.NotNull(taskInt);
+        // Should have f_result field for the return value
+        var fields = taskInt!.Fields.Select(f => f.Name).ToList();
+        Assert.Contains("f_result", fields);
+        Assert.Contains("f_status", fields);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Async_BuilderSetResultIntercepted()
+    {
+        var module = BuildFeatureTest();
+        var stateMachine = module.Types.FirstOrDefault(t =>
+            t.Name.Contains("ComputeAsync") && t.Name.Contains("d__"));
+        Assert.NotNull(stateMachine);
+        var moveNext = stateMachine!.Methods.First(m => m.Name == "MoveNext");
+        var rawCpp = moveNext.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().Select(r => r.Code).ToList();
+        var allCode = string.Join("\n", rawCpp);
+        // SetResult should set f_result on the task
+        Assert.Contains("f_status", allCode);
+    }
 }

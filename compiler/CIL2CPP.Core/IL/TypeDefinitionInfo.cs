@@ -16,7 +16,10 @@ public class TypeDefinitionInfo
 
     public bool IsClass => _type.IsClass;
     public bool IsInterface => _type.IsInterface;
-    public bool IsValueType => _type.IsValueType;
+    // Cecil's IsValueType can fail for compiler-generated structs (e.g. async state machines)
+    // when the BCL assembly isn't loaded. Fall back to checking BaseType.FullName.
+    public bool IsValueType => _type.IsValueType
+        || _type.BaseType?.FullName == "System.ValueType";
     public bool IsEnum => _type.IsEnum;
     public bool IsAbstract => _type.IsAbstract;
     public bool IsSealed => _type.IsSealed;

@@ -201,15 +201,41 @@ public partial class IRBuilder
     {
         foreach (var (key, info) in _genericInstantiations)
         {
-            if (info.CecilOpenType == null) continue;
+            var isAsyncBcl = IsAsyncBclGenericType(info.OpenTypeName);
 
-            var openType = info.CecilOpenType;
+            // Skip types we can't resolve — except async BCL types (synthetic fields)
+            if (info.CecilOpenType == null && !isAsyncBcl) continue;
 
-            // Build type parameter map: { "T" → "System.Int32", ... }
+            var openType = info.CecilOpenType; // may be null for async BCL types
+
+            // Build type parameter map
             var typeParamMap = new Dictionary<string, string>();
-            for (int i = 0; i < openType.GenericParameters.Count && i < info.TypeArguments.Count; i++)
+            if (openType != null)
             {
-                typeParamMap[openType.GenericParameters[i].Name] = info.TypeArguments[i];
+                for (int i = 0; i < openType.GenericParameters.Count && i < info.TypeArguments.Count; i++)
+                    typeParamMap[openType.GenericParameters[i].Name] = info.TypeArguments[i];
+            }
+            else if (isAsyncBcl && info.TypeArguments.Count > 0)
+            {
+                // Async BCL types always have TResult as their single generic parameter
+                typeParamMap["TResult"] = info.TypeArguments[0];
+            }
+
+            // Determine type flags
+            bool isValueType;
+            string namespaceName;
+            if (openType != null)
+            {
+                isValueType = openType.IsValueType;
+                namespaceName = openType.Namespace;
+            }
+            else
+            {
+                // Async BCL: TaskAwaiter<T> and AsyncTaskMethodBuilder<T> are value types
+                isValueType = !info.OpenTypeName.StartsWith("System.Threading.Tasks.Task`");
+                namespaceName = info.OpenTypeName.Contains("CompilerServices")
+                    ? "System.Runtime.CompilerServices"
+                    : "System.Threading.Tasks";
             }
 
             var irType = new IRType
@@ -217,103 +243,112 @@ public partial class IRBuilder
                 ILFullName = key,
                 CppName = info.MangledName,
                 Name = info.MangledName,
-                Namespace = openType.Namespace,
-                IsValueType = openType.IsValueType,
-                IsInterface = openType.IsInterface,
-                IsAbstract = openType.IsAbstract,
-                IsSealed = openType.IsSealed,
+                Namespace = namespaceName,
+                IsValueType = isValueType,
+                IsInterface = openType?.IsInterface ?? false,
+                IsAbstract = openType?.IsAbstract ?? false,
+                IsSealed = openType?.IsSealed ?? true,
                 IsGenericInstance = true,
                 GenericArguments = info.TypeArguments,
+                IsRuntimeProvided = isAsyncBcl,
             };
 
-            // Register value types — both IL key and C++ mangled name
-            // so IsValueType and GetDefaultValue both work correctly
-            if (openType.IsValueType)
+            // Register value types
+            if (isValueType)
             {
                 CppNameMapper.RegisterValueType(key);
                 CppNameMapper.RegisterValueType(info.MangledName);
             }
 
-            // Fields: substitute generic parameters
-            foreach (var fieldDef in openType.Fields)
+            // Fields: synthetic for async BCL, Cecil-based for everything else
+            if (isAsyncBcl)
             {
-                var fieldTypeName = ResolveGenericTypeName(fieldDef.FieldType, typeParamMap);
-                var irField = new IRField
+                irType.Fields.AddRange(CreateAsyncSyntheticFields(info.OpenTypeName, irType, typeParamMap));
+            }
+            else
+            {
+                foreach (var fieldDef in openType!.Fields)
                 {
-                    Name = fieldDef.Name,
-                    CppName = CppNameMapper.MangleFieldName(fieldDef.Name),
-                    FieldTypeName = fieldTypeName,
-                    IsStatic = fieldDef.IsStatic,
-                    IsPublic = fieldDef.IsPublic,
-                    DeclaringType = irType,
-                };
-                if (fieldDef.IsStatic)
-                    irType.StaticFields.Add(irField);
-                else
-                    irType.Fields.Add(irField);
+                    var fieldTypeName = ResolveGenericTypeName(fieldDef.FieldType, typeParamMap);
+                    var irField = new IRField
+                    {
+                        Name = fieldDef.Name,
+                        CppName = CppNameMapper.MangleFieldName(fieldDef.Name),
+                        FieldTypeName = fieldTypeName,
+                        IsStatic = fieldDef.IsStatic,
+                        IsPublic = fieldDef.IsPublic,
+                        DeclaringType = irType,
+                    };
+                    if (fieldDef.IsStatic)
+                        irType.StaticFields.Add(irField);
+                    else
+                        irType.Fields.Add(irField);
+                }
             }
 
             // Calculate instance size
             CalculateInstanceSize(irType);
 
-            // Methods: create shells with substituted types
-            foreach (var methodDef in openType.Methods)
+            // Methods: skip entirely for async BCL types (all calls are intercepted)
+            if (openType != null && !isAsyncBcl)
             {
-                var returnTypeName = ResolveGenericTypeName(methodDef.ReturnType, typeParamMap);
-                var cppName = CppNameMapper.MangleMethodName(info.MangledName, methodDef.Name);
-
-                var irMethod = new IRMethod
+                foreach (var methodDef in openType.Methods)
                 {
-                    Name = methodDef.Name,
-                    CppName = cppName,
-                    DeclaringType = irType,
-                    ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(returnTypeName),
-                    IsStatic = methodDef.IsStatic,
-                    IsVirtual = methodDef.IsVirtual,
-                    IsAbstract = methodDef.IsAbstract,
-                    IsConstructor = methodDef.IsConstructor,
-                    IsStaticConstructor = methodDef.IsConstructor && methodDef.IsStatic,
-                };
+                    var returnTypeName = ResolveGenericTypeName(methodDef.ReturnType, typeParamMap);
+                    var cppName = CppNameMapper.MangleMethodName(info.MangledName, methodDef.Name);
 
-                // Parameters
-                foreach (var paramDef in methodDef.Parameters)
-                {
-                    var paramTypeName = ResolveGenericTypeName(paramDef.ParameterType, typeParamMap);
-                    irMethod.Parameters.Add(new IRParameter
+                    var irMethod = new IRMethod
                     {
-                        Name = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
-                        CppName = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
-                        CppTypeName = CppNameMapper.GetCppTypeForDecl(paramTypeName),
-                        Index = paramDef.Index,
-                    });
-                }
+                        Name = methodDef.Name,
+                        CppName = cppName,
+                        DeclaringType = irType,
+                        ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(returnTypeName),
+                        IsStatic = methodDef.IsStatic,
+                        IsVirtual = methodDef.IsVirtual,
+                        IsAbstract = methodDef.IsAbstract,
+                        IsConstructor = methodDef.IsConstructor,
+                        IsStaticConstructor = methodDef.IsConstructor && methodDef.IsStatic,
+                    };
 
-                // Local variables
-                if (methodDef.HasBody)
-                {
-                    foreach (var localDef in methodDef.Body.Variables)
+                    // Parameters
+                    foreach (var paramDef in methodDef.Parameters)
                     {
-                        var localTypeName = ResolveGenericTypeName(localDef.VariableType, typeParamMap);
-                        irMethod.Locals.Add(new IRLocal
+                        var paramTypeName = ResolveGenericTypeName(paramDef.ParameterType, typeParamMap);
+                        irMethod.Parameters.Add(new IRParameter
                         {
-                            Index = localDef.Index,
-                            CppName = $"loc_{localDef.Index}",
-                            CppTypeName = CppNameMapper.GetCppTypeForDecl(localTypeName),
+                            Name = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                            CppName = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                            CppTypeName = CppNameMapper.GetCppTypeForDecl(paramTypeName),
+                            Index = paramDef.Index,
                         });
                     }
-                }
 
-                irType.Methods.Add(irMethod);
+                    // Local variables
+                    if (methodDef.HasBody)
+                    {
+                        foreach (var localDef in methodDef.Body.Variables)
+                        {
+                            var localTypeName = ResolveGenericTypeName(localDef.VariableType, typeParamMap);
+                            irMethod.Locals.Add(new IRLocal
+                            {
+                                Index = localDef.Index,
+                                CppName = $"loc_{localDef.Index}",
+                                CppTypeName = CppNameMapper.GetCppTypeForDecl(localTypeName),
+                            });
+                        }
+                    }
 
-                // Convert method body with generic substitution context
-                // Skip BCL generic types (Nullable<T>, ValueTuple) — their method calls
-                // are intercepted in EmitMethodCall/EmitNewObj instead
-                var isBclGeneric = info.OpenTypeName.StartsWith("System.Nullable`")
-                    || info.OpenTypeName.StartsWith("System.ValueTuple`");
-                if (!isBclGeneric && methodDef.HasBody && !methodDef.IsAbstract)
-                {
-                    var methodInfo = new IL.MethodInfo(methodDef);
-                    ConvertMethodBodyWithGenerics(methodInfo, irMethod, typeParamMap);
+                    irType.Methods.Add(irMethod);
+
+                    // Convert method body with generic substitution context
+                    // Skip BCL generic types — their method calls are intercepted instead
+                    var isBclGeneric = info.OpenTypeName.StartsWith("System.Nullable`")
+                        || info.OpenTypeName.StartsWith("System.ValueTuple`");
+                    if (!isBclGeneric && methodDef.HasBody && !methodDef.IsAbstract)
+                    {
+                        var methodInfo = new IL.MethodInfo(methodDef);
+                        ConvertMethodBodyWithGenerics(methodInfo, irMethod, typeParamMap);
+                    }
                 }
             }
 

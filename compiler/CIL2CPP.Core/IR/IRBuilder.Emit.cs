@@ -51,6 +51,10 @@ public partial class IRBuilder
         if (TryEmitValueTupleCall(block, stack, methodRef, ref tempCounter))
             return;
 
+        // Special: Async BCL types (Task, TaskAwaiter, AsyncTaskMethodBuilder)
+        if (TryEmitAsyncCall(block, stack, methodRef, ref tempCounter))
+            return;
+
         // Special: Delegate.Invoke — emit IRDelegateInvoke instead of normal call
         var declaringCacheKey = ResolveCacheKey(methodRef.DeclaringType);
         if (methodRef.Name == "Invoke" && methodRef.HasThis
@@ -247,6 +251,10 @@ public partial class IRBuilder
 
         // Special: ValueTuple constructor (newobj pattern — value type, can't use gc::alloc)
         if (TryEmitValueTupleNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: Async BCL types (rare — builder uses Create() factory, not newobj)
+        if (TryEmitAsyncNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
         var cacheKey = ResolveCacheKey(ctorRef.DeclaringType);

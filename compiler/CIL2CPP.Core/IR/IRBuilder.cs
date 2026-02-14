@@ -33,6 +33,10 @@ public partial class IRBuilder
         "System.Exception",
         "System.Delegate",
         "System.MulticastDelegate",
+        "System.Threading.Tasks.Task",
+        "System.Runtime.CompilerServices.TaskAwaiter",
+        "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
+        "System.Runtime.CompilerServices.IAsyncStateMachine",
     };
 
     private readonly AssemblyReader _reader;
@@ -108,6 +112,13 @@ public partial class IRBuilder
     private IRModule BuildInternal()
     {
         CppNameMapper.ClearValueTypes();
+
+        // Register async BCL value types (awaiter + builder are value types)
+        // Register both IL names and C++ mangled names for GetDefaultValue
+        CppNameMapper.RegisterValueType("System.Runtime.CompilerServices.TaskAwaiter");
+        CppNameMapper.RegisterValueType("System_Runtime_CompilerServices_TaskAwaiter");
+        CppNameMapper.RegisterValueType("System.Runtime.CompilerServices.AsyncTaskMethodBuilder");
+        CppNameMapper.RegisterValueType("System_Runtime_CompilerServices_AsyncTaskMethodBuilder");
 
         // Pass 0: Scan for generic instantiations in all method bodies
         ScanGenericInstantiations();
