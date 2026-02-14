@@ -1507,6 +1507,226 @@ public class IRBuilderTests
         Assert.True(instrs.Count > 0, "Swap should have instructions");
     }
 
+    // ===== Generic Methods (standalone, not generic types) =====
+
+    [Fact]
+    public void Build_FeatureTest_GenericMethods_IdentityInt_Exists()
+    {
+        var module = BuildFeatureTest();
+        var utils = module.FindType("GenericUtils");
+        Assert.NotNull(utils);
+        var identityInt = utils!.Methods.FirstOrDefault(m =>
+            m.CppName.Contains("Identity") && m.CppName.Contains("System_Int32"));
+        Assert.NotNull(identityInt);
+        Assert.True(identityInt!.IsGenericInstance);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericMethods_IdentityString_Exists()
+    {
+        var module = BuildFeatureTest();
+        var utils = module.FindType("GenericUtils");
+        Assert.NotNull(utils);
+        var identityStr = utils!.Methods.FirstOrDefault(m =>
+            m.CppName.Contains("Identity") && m.CppName.Contains("System_String"));
+        Assert.NotNull(identityStr);
+        Assert.Equal("cil2cpp::String*", identityStr!.ReturnTypeCpp);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericMethods_SwapInt_Exists()
+    {
+        var module = BuildFeatureTest();
+        var utils = module.FindType("GenericUtils");
+        Assert.NotNull(utils);
+        var swapInt = utils!.Methods.FirstOrDefault(m =>
+            m.CppName.Contains("Swap") && m.CppName.Contains("System_Int32"));
+        Assert.NotNull(swapInt);
+        Assert.Equal(2, swapInt!.Parameters.Count);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericMethods_IdentityInt_HasBody()
+    {
+        var module = BuildFeatureTest();
+        var utils = module.FindType("GenericUtils");
+        Assert.NotNull(utils);
+        var identityInt = utils!.Methods.First(m =>
+            m.CppName.Contains("Identity") && m.CppName.Contains("System_Int32"));
+        var instrs = identityInt.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        Assert.True(instrs.Count > 0, "Identity<int> should have method body");
+        Assert.Contains(instrs, i => i is IRReturn);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericMethods_OpenMethodsSkipped()
+    {
+        var module = BuildFeatureTest();
+        var utils = module.FindType("GenericUtils");
+        Assert.NotNull(utils);
+        // Open generic methods (Identity<T>, Swap<T>) should NOT appear as non-specialized
+        var openMethods = utils!.Methods.Where(m =>
+            m.Name is "Identity" or "Swap" && !m.IsGenericInstance).ToList();
+        Assert.Empty(openMethods);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestGenericMethods_CallsSpecialized()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestGenericMethods");
+        var calls = instrs.OfType<IRCall>().ToList();
+        Assert.Contains(calls, c => c.FunctionName.Contains("Identity") && c.FunctionName.Contains("System_Int32"));
+        Assert.Contains(calls, c => c.FunctionName.Contains("Identity") && c.FunctionName.Contains("System_String"));
+        Assert.Contains(calls, c => c.FunctionName.Contains("Swap") && c.FunctionName.Contains("System_Int32"));
+    }
+
+    // ===== Lambda/Closures =====
+
+    [Fact]
+    public void Build_FeatureTest_Lambda_DisplayClass_Exists()
+    {
+        var module = BuildFeatureTest();
+        // C# compiler generates <>c class for stateless lambdas
+        var lambdaType = module.Types.FirstOrDefault(t => t.CppName.Contains("___c") && !t.CppName.Contains("DisplayClass"));
+        Assert.NotNull(lambdaType);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Lambda_DisplayClass_HasMethods()
+    {
+        var module = BuildFeatureTest();
+        var lambdaType = module.Types.FirstOrDefault(t => t.CppName.Contains("___c") && !t.CppName.Contains("DisplayClass"));
+        Assert.NotNull(lambdaType);
+        // Should have lambda body methods (e.g., <TestLambda>b__43_0)
+        Assert.True(lambdaType!.Methods.Count >= 2, "Lambda display class should have lambda body methods");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Closure_DisplayClass_Exists()
+    {
+        var module = BuildFeatureTest();
+        // C# compiler generates <>c__DisplayClass for closures
+        var closureType = module.Types.FirstOrDefault(t => t.CppName.Contains("DisplayClass"));
+        Assert.NotNull(closureType);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Closure_DisplayClass_HasCapturedFields()
+    {
+        var module = BuildFeatureTest();
+        var closureType = module.Types.FirstOrDefault(t => t.CppName.Contains("DisplayClass"));
+        Assert.NotNull(closureType);
+        // Should have captured variable fields
+        Assert.True(closureType!.Fields.Count >= 1, "Closure display class should have captured variable fields");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestLambda_HasDelegateCreate()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestLambda");
+        Assert.Contains(instrs, i => i is IRDelegateCreate);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestLambda_HasDelegateInvoke()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestLambda");
+        Assert.Contains(instrs, i => i is IRDelegateInvoke);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestClosure_CreatesDelegateFromDisplayClass()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestClosure");
+        // Should create display class instance (IRNewObj)
+        Assert.Contains(instrs, i => i is IRNewObj);
+        // Should create delegate from display class method (IRDelegateCreate)
+        Assert.Contains(instrs, i => i is IRDelegateCreate);
+        // Should invoke delegate (IRDelegateInvoke)
+        Assert.Contains(instrs, i => i is IRDelegateInvoke);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestClosure_HasFieldAccess()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestClosure");
+        // Should store captured variable to display class field
+        var fieldAccesses = instrs.OfType<IRFieldAccess>().Where(f => f.IsStore).ToList();
+        Assert.True(fieldAccesses.Count >= 1, "Should store captured variables to display class");
+    }
+
+    // ===== Events =====
+
+    [Fact]
+    public void Build_FeatureTest_EventSource_HasDelegateField()
+    {
+        var module = BuildFeatureTest();
+        var eventType = module.FindType("EventSource");
+        Assert.NotNull(eventType);
+        // Event backing field (delegate)
+        Assert.True(eventType!.Fields.Count >= 1, "EventSource should have delegate backing field");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_EventSource_HasAddRemoveMethods()
+    {
+        var module = BuildFeatureTest();
+        var eventType = module.FindType("EventSource");
+        Assert.NotNull(eventType);
+        var methodNames = eventType!.Methods.Select(m => m.Name).ToList();
+        // C# generates add_ and remove_ accessor methods for events
+        Assert.Contains("add_OnNotify", methodNames);
+        Assert.Contains("remove_OnNotify", methodNames);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_EventSource_HasSubscribeFireMethods()
+    {
+        var module = BuildFeatureTest();
+        var eventType = module.FindType("EventSource");
+        Assert.NotNull(eventType);
+        var methodNames = eventType!.Methods.Select(m => m.Name).ToList();
+        Assert.Contains("Subscribe", methodNames);
+        Assert.Contains("Unsubscribe", methodNames);
+        Assert.Contains("Fire", methodNames);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_EventSource_FireMethod_HasDelegateInvoke()
+    {
+        var module = BuildFeatureTest();
+        var fireMethod = module.FindType("EventSource")!.Methods.First(m => m.Name == "Fire");
+        var instrs = fireMethod.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        Assert.Contains(instrs, i => i is IRDelegateInvoke);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestEvents_HasMethodCalls()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestEvents");
+        var calls = instrs.OfType<IRCall>().ToList();
+        Assert.True(calls.Count >= 3, "TestEvents should have Subscribe/Unsubscribe/Fire calls");
+    }
+
+    // ===== Ldflda / Ldobj / Stobj instructions =====
+
+    [Fact]
+    public void Build_FeatureTest_EventSource_AddMethod_HasLdflda()
+    {
+        var module = BuildFeatureTest();
+        var addMethod = module.FindType("EventSource")!.Methods.First(m => m.Name == "add_OnNotify");
+        var instrs = addMethod.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        // The auto-generated add_ method uses ldflda for Interlocked.CompareExchange
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("&") && r.Code.Contains("->"));
+    }
+
     // ===== Phase 2: User value type registration =====
 
     [Fact]
@@ -1529,5 +1749,170 @@ public class IRBuilderTests
         Assert.Contains("ToString", vtableNames);
         Assert.Contains("Equals", vtableNames);
         Assert.Contains("GetHashCode", vtableNames);
+    }
+
+    // ===== Ref parameters: Ldind_I4 / Stind_I4 =====
+
+    [Fact]
+    public void Build_FeatureTest_SwapInt_HasLdindI4()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "SwapInt");
+        // ldind.i4 produces IRRawCpp with *(int32_t*) cast
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("*(int32_t*)"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_SwapInt_HasStindI4()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "SwapInt");
+        // stind.i4 produces IRRawCpp with *(int32_t*) assignment
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("*(int32_t*)") && r.Code.Contains("="));
+    }
+
+    // ===== Ref parameters: Ldind_Ref / Stind_Ref =====
+
+    [Fact]
+    public void Build_FeatureTest_SwapObj_HasLdindRef()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "SwapObj");
+        // ldind.ref produces IRRawCpp with *(cil2cpp::Object**)
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("*(cil2cpp::Object**)"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_SwapObj_HasStindRef()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "SwapObj");
+        // stind.ref produces IRRawCpp with *(cil2cpp::Object**) assignment
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("*(cil2cpp::Object**)") && r.Code.Contains("="));
+    }
+
+    // ===== TestRefParams calls SwapInt and SwapObj =====
+
+    [Fact]
+    public void Build_FeatureTest_TestRefParams_HasSwapCalls()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestRefParams");
+        var calls = instrs.OfType<IRCall>().ToList();
+        Assert.Contains(calls, c => c.FunctionName.Contains("SwapInt"));
+        Assert.Contains(calls, c => c.FunctionName.Contains("SwapObj"));
+    }
+
+    // ===== Ldsflda (load static field address) =====
+
+    [Fact]
+    public void Build_FeatureTest_TestStaticFieldRef_HasLdsflda()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestStaticFieldRef");
+        // ldsflda produces IRRawCpp with &TypeName_statics.fieldName
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("_statics.") && r.Code.Contains("&"));
+    }
+
+    // ===== Ldvirtftn (virtual function pointer for delegate) =====
+
+    [Fact]
+    public void Build_FeatureTest_TestVirtualDelegate_HasLdvirtftn()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestVirtualDelegate");
+        var ldfptrs = instrs.OfType<IRLoadFunctionPointer>().ToList();
+        Assert.Contains(ldfptrs, p => p.IsVirtual);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestVirtualDelegate_HasDelegateCreate()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestVirtualDelegate");
+        Assert.Contains(instrs, i => i is IRDelegateCreate);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestVirtualDelegate_HasDelegateInvoke()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestVirtualDelegate");
+        Assert.Contains(instrs, i => i is IRDelegateInvoke);
+    }
+
+    // ===== Generic value type (Pair<T>) =====
+
+    [Fact]
+    public void Build_FeatureTest_PairInt_Exists()
+    {
+        var module = BuildFeatureTest();
+        var pairTypes = module.Types.Where(t => t.IsGenericInstance && t.CppName.Contains("Pair")).ToList();
+        Assert.True(pairTypes.Count >= 1, "Should have Pair<int> specialization");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PairInt_IsValueType()
+    {
+        var module = BuildFeatureTest();
+        var pairInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance && t.CppName.Contains("Pair")
+            && t.GenericArguments.Contains("System.Int32"));
+        Assert.NotNull(pairInt);
+        Assert.True(pairInt!.IsValueType, "Pair<int> should be a value type");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PairInt_HasFields()
+    {
+        var module = BuildFeatureTest();
+        var pairInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance && t.CppName.Contains("Pair")
+            && t.GenericArguments.Contains("System.Int32"));
+        Assert.NotNull(pairInt);
+        var fieldNames = pairInt!.Fields.Select(f => f.Name).ToList();
+        Assert.Contains("First", fieldNames);
+        Assert.Contains("Second", fieldNames);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PairInt_FieldTypesSubstituted()
+    {
+        var module = BuildFeatureTest();
+        var pairInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance && t.CppName.Contains("Pair")
+            && t.GenericArguments.Contains("System.Int32"));
+        Assert.NotNull(pairInt);
+        var firstField = pairInt!.Fields.First(f => f.Name == "First");
+        Assert.Equal("System.Int32", firstField.FieldTypeName);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PairInt_HasConstructor()
+    {
+        var module = BuildFeatureTest();
+        var pairInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance && t.CppName.Contains("Pair")
+            && t.GenericArguments.Contains("System.Int32"));
+        Assert.NotNull(pairInt);
+        var ctor = pairInt!.Methods.FirstOrDefault(m => m.IsConstructor);
+        Assert.NotNull(ctor);
+        Assert.Equal(2, ctor!.Parameters.Count);
+    }
+
+    // ===== StringFunc delegate type =====
+
+    [Fact]
+    public void Build_FeatureTest_StringFunc_IsDelegate()
+    {
+        var module = BuildFeatureTest();
+        var stringFunc = module.FindType("StringFunc");
+        Assert.NotNull(stringFunc);
+        Assert.True(stringFunc!.IsDelegate);
     }
 }

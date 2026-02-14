@@ -28,6 +28,10 @@ public partial class IRBuilder
             && methodDef.Parameters.Count == 0 && methodDef.ReturnTypeName == "System.Void")
             irMethod.IsFinalizer = true;
 
+        // Detect [MethodImpl(MethodImplOptions.InternalCall)]
+        if (methodDef.IsInternalCall)
+            irMethod.IsInternalCall = true;
+
         // Detect operator methods
         if (methodDef.Name.StartsWith("op_"))
         {
@@ -585,6 +589,106 @@ public partial class IRBuilder
                     FieldCppName = CppNameMapper.MangleFieldName(fieldRef.Name),
                     IsStore = true,
                     StoreValue = val,
+                });
+                break;
+            }
+
+            case Code.Ldflda:
+            {
+                var fieldRef = (FieldReference)instr.Operand!;
+                var obj = stack.Count > 0 ? stack.Pop() : "__this";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = &{obj}->{CppNameMapper.MangleFieldName(fieldRef.Name)};"
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            case Code.Ldsflda:
+            {
+                var fieldRef = (FieldReference)instr.Operand!;
+                var typeCppName = GetMangledTypeNameForRef(fieldRef.DeclaringType);
+                var fieldCacheKey = ResolveCacheKey(fieldRef.DeclaringType);
+                EmitCctorGuardIfNeeded(block, fieldCacheKey, typeCppName);
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = &{typeCppName}_statics.{CppNameMapper.MangleFieldName(fieldRef.Name)};"
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            // ===== Indirect Load/Store (pointer dereference) =====
+            case Code.Ldobj:
+            {
+                var typeRef = (TypeReference)instr.Operand!;
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = *{addr};"
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            case Code.Stobj:
+            {
+                var typeRef = (TypeReference)instr.Operand!;
+                var val = stack.Count > 0 ? stack.Pop() : "0";
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"*{addr} = {val};"
+                });
+                break;
+            }
+
+            case Code.Ldind_I4:
+            {
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = *(int32_t*){addr};"
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            case Code.Ldind_Ref:
+            {
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = *(cil2cpp::Object**){addr};"
+                });
+                stack.Push(tmp);
+                break;
+            }
+
+            case Code.Stind_Ref:
+            {
+                var val = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"*(cil2cpp::Object**){addr} = (cil2cpp::Object*){val};"
+                });
+                break;
+            }
+
+            case Code.Stind_I4:
+            {
+                var val = stack.Count > 0 ? stack.Pop() : "0";
+                var addr = stack.Count > 0 ? stack.Pop() : "nullptr";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"*(int32_t*){addr} = (int32_t){val};"
                 });
                 break;
             }

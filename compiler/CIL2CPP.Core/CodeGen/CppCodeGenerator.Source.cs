@@ -153,7 +153,7 @@ public partial class CppCodeGenerator
 
             foreach (var method in type.Methods)
             {
-                if (method.IsAbstract) continue;
+                if (method.IsAbstract || method.IsInternalCall) continue;
                 GenerateMethodImpl(sb, method);
             }
         }

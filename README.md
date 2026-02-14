@@ -373,11 +373,12 @@ void Program_Main() {
 | 静态字段 | ✅ | 存储在 `<Type>_statics` 全局结构体中 |
 | 继承（单继承） | ✅ | 基类字段拷贝到派生结构体，base 类型追踪，VTable 继承 |
 | 虚方法 / 多态 | ✅ | 完整 VTable 分派：`obj->__type_info->vtable->methods[slot]` 函数指针调用 |
-| 属性 | ⚠️ | C# 编译器生成的 get_/set_ 方法调用可工作，但无属性元数据 |
+| 属性 | ✅ | C# 编译器生成的 get_/set_ 方法调用可工作（auto-property + 手动 property） |
 | 类型转换 (is / as) | ✅ | isinst → object_as()，castclass → object_cast() |
 | 抽象类/方法 | ⚠️ | 识别 IsAbstract 标志，抽象方法跳过代码生成 |
 | 接口 | ✅ | InterfaceVTable 分派：编译器生成接口方法表，运行时 `type_get_interface_vtable()` 查找 |
-| 泛型 | ❌ | |
+| 泛型类 | ✅ | 单态化（monomorphization）：`Wrapper<int>` → `Wrapper_1_System_Int32` 独立 C++ 类型 |
+| 泛型方法 | ✅ | 单态化：`Identity<int>()` → `GenericUtils_Identity_System_Int32()` 独立函数 |
 | 运算符重载 | ✅ | C# 编译为 `op_Addition` 等静态方法调用，编译器自动识别并标记 |
 | 索引器 | ❌ | |
 | 终结器 / 析构函数 | ✅ | 编译器检测 `Finalize()` 方法，生成 finalizer wrapper → TypeInfo.finalizer，BoehmGC 自动注册 |
@@ -450,10 +451,10 @@ void Program_Main() {
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| 委托 (Delegate) | ❌ | 需要 Ldftn / Ldvirtftn / Calli |
-| 事件 (event) | ❌ | |
-| 多播委托 | ❌ | |
-| Lambda / 匿名方法 | ❌ | |
+| 委托 (Delegate) | ✅ | ldftn/ldvirtftn → 函数指针，newobj → `delegate_create()`，Invoke → `IRDelegateInvoke` |
+| 事件 (event) | ✅ | C# 生成 add_/remove_ 方法 + 委托字段，Subscribe/Unsubscribe 通过 `Delegate.Combine/Remove` |
+| 多播委托 | ✅ | `Delegate.Combine` / `Delegate.Remove` 映射到运行时 `delegate_combine` / `delegate_remove` |
+| Lambda / 匿名方法 | ✅ | C# 编译器生成 `<>c` 静态类（无捕获）/ `<>c__DisplayClass`（闭包），编译器自动处理 |
 | LINQ | ❌ | 需要泛型 + 委托 + IEnumerable\<T\> |
 
 ### 高级功能
@@ -464,7 +465,7 @@ void Program_Main() {
 | 多线程 (Thread, Task, lock) | ❌ | |
 | 反射 (Type.GetMethods 等) | ❌ | TypeInfo 有 MethodInfo/FieldInfo 数组但未填充 |
 | 特性 (Attribute) | ❌ | |
-| unsafe 代码 (指针, fixed, stackalloc) | ❌ | Ldind_*/Stind_* 未处理 |
+| unsafe 代码 (指针, fixed, stackalloc) | ⚠️ | Ldobj/Stobj/Ldflda/Ldsflda/Ldind_I4/Ldind_Ref/Stind_I4/Stind_Ref 已支持；fixed/stackalloc 未处理 |
 | P/Invoke / DllImport | ❌ | |
 | 默认参数 / 命名参数 | ❌ | |
 | ref struct / ref return | ❌ | |
@@ -490,12 +491,12 @@ void Program_Main() {
 基于功能依赖关系的分阶段实现计划。每个阶段产出可用的增量：
 
 ```
-Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托)
-  数组 (全功能)         VTable 多态分派           泛型
+Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托) ✅
+  数组 (全功能)         VTable 多态分派           泛型类+泛型方法
   try/catch/finally     接口分派                  委托 → 事件
   switch                枚举完整支持              Lambda/闭包
-  值类型+装箱/拆箱      运算符重载               集合类 (List<T>)
-  静态构造函数          终结器                   IEnumerable<T> / foreach
+  值类型+装箱/拆箱      运算符重载               属性 (auto+手动)
+  静态构造函数          终结器                   [InternalCall] 识别
   System.Math
   类型转换 (全部)
        │                    │                        │
@@ -563,17 +564,20 @@ Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托)
 | **运算符重载** | ✅ | C# `op_Addition` 等静态方法调用自动识别，编译器标记 IsOperator + OperatorName |
 | **终结器** | ✅ | 编译器检测 `Finalize()` 方法，生成 finalizer wrapper 函数 → TypeInfo.finalizer，BoehmGC `GC_register_finalizer_no_order()` 自动注册 |
 
-### Phase 3：泛型与委托
+### Phase 3：泛型与委托 ✅ 已完成
 
-解锁集合类库和函数式编程范式。这是支持现代 C# 代码的关键阶段。
+解锁集合类库和函数式编程范式。
 
-| 功能 | 说明 |
-|------|------|
-| **泛型（类、方法、约束）** | C++ 模板或单态化实现。解锁 List\<T\>、Dictionary\<K,V\> 等集合类 |
-| **委托** | 函数指针包装。解锁事件、回调、LINQ |
-| **事件** | 基于委托的 add/remove 方法 |
-| **Lambda / 闭包** | 编译器生成的显示类 + 委托实例化 |
-| **`[InternalCall]` 识别** | 编译器识别 `MethodImplOptions.InternalCall` 特性，生成 icall 桩函数而非翻译方法体。为 Phase 4 做准备 |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **泛型类** | ✅ | 单态化（monomorphization）：`Wrapper<int>` → `Wrapper_1_System_Int32` 独立 C++ 类型 |
+| **泛型方法** | ✅ | 单态化：`Identity<int>()` → `GenericUtils_Identity_System_Int32()` 独立函数 |
+| **属性** | ✅ | C# 编译器生成的 get_/set_ 方法调用（auto-property + 手动 property） |
+| **委托** | ✅ | ldftn/ldvirtftn → 函数指针，newobj → `delegate_create()`，Invoke → `IRDelegateInvoke` |
+| **多播委托** | ✅ | `Delegate.Combine` / `Delegate.Remove` 映射到运行时 `delegate_combine` / `delegate_remove` |
+| **事件** | ✅ | C# 生成 add_/remove_ 方法 + 委托字段，Subscribe/Unsubscribe 通过 `Delegate.Combine/Remove` |
+| **Lambda / 闭包** | ✅ | C# 编译器生成 `<>c` 静态类（无捕获）/ `<>c__DisplayClass`（闭包），编译器自动处理 |
+| **`[InternalCall]` 识别** | ✅ | 编译器检测 `MethodImplOptions.InternalCall` 特性，跳过方法体生成。为 Phase 4 icall 层做准备 |
 
 ### Phase 4：BCL 自动翻译 + 语言特性
 
@@ -694,18 +698,20 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 
 | 模块 | 测试数 |
 |------|--------|
-| CppNameMapper | 89 |
-| BuildConfiguration | 15 |
-| IRModule | 14 |
-| IRMethod / IRType | 7 |
-| IR Instructions (全部) | 45 |
 | ILInstructionCategory | 159 |
-| CppCodeGenerator | 42 |
-| IRBuilder | 75 |
-| TypeDefinitionInfo | 62 |
+| IRBuilder | 159 |
+| CppNameMapper | 100 |
+| CppCodeGenerator | 70 |
+| TypeDefinitionInfo | 65 |
+| IR Instructions (全部) | 54 |
+| IRModule | 44 |
+| IRMethod | 30 |
+| IRType | 23 |
+| BuildConfiguration | 15 |
 | AssemblyReader | 12 |
 | SequencePointInfo | 5 |
-| **合计** | **525** |
+| IRField / IRVTableEntry / IRInterfaceImpl | 7 |
+| **合计** | **743** |
 
 ### 运行时单元测试 (C++ / Google Test)
 
@@ -722,13 +728,16 @@ ctest --test-dir runtime/tests/build -C Debug --output-on-failure
 
 | 模块 | 测试数 |
 |------|--------|
+| String | 52 |
+| Type System | 39 |
+| Object | 28 |
+| Console | 27 |
+| Boxing | 26 |
+| Exception | 24 (1 disabled) |
+| Array | 21 |
+| Delegate | 18 |
 | GC | 14 |
-| String | 34 |
-| Array | 14 |
-| Type System | 18 |
-| Object | 18 |
-| Exception | 11 (1 disabled) |
-| **合计** | **109** |
+| **合计** | **249** |
 
 ### 端到端集成测试
 
@@ -772,8 +781,8 @@ python tools/dev.py build                  # 编译 compiler + runtime
 python tools/dev.py build --compiler       # 仅编译 compiler
 python tools/dev.py build --runtime        # 仅编译 runtime
 python tools/dev.py test --all             # 运行全部测试（编译器 + 运行时 + 集成）
-python tools/dev.py test --compiler        # 仅编译器测试 (525 xUnit)
-python tools/dev.py test --runtime         # 仅运行时测试 (109 GTest)
+python tools/dev.py test --compiler        # 仅编译器测试 (743 xUnit)
+python tools/dev.py test --runtime         # 仅运行时测试 (249 GTest)
 python tools/dev.py test --coverage        # 测试 + 覆盖率 HTML 报告
 python tools/dev.py install                # 安装 runtime (Debug + Release)
 python tools/dev.py codegen HelloWorld     # 快速代码生成测试

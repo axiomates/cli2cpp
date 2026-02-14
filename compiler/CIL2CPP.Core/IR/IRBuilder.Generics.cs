@@ -9,6 +9,24 @@ public partial class IRBuilder
     private Dictionary<string, string>? _activeTypeParamMap;
 
     /// <summary>
+    /// Construct a unique key for a generic method instantiation.
+    /// Shared between scanning (CollectGenericMethod) and call emission (EmitMethodCall).
+    /// </summary>
+    private static string MakeGenericMethodKey(string declaringType, string methodName, List<string> typeArgs)
+        => $"{declaringType}::{methodName}<{string.Join(",", typeArgs)}>";
+
+    /// <summary>
+    /// Mangle a generic method instantiation name for C++ emission.
+    /// Shared between scanning (CollectGenericMethod) and call emission fallback (EmitMethodCall).
+    /// </summary>
+    private static string MangleGenericMethodName(string declaringType, string methodName, List<string> typeArgs)
+    {
+        var typeCppName = CppNameMapper.MangleTypeName(declaringType);
+        var argParts = string.Join("_", typeArgs.Select(CppNameMapper.MangleTypeName));
+        return $"{typeCppName}_{CppNameMapper.MangleTypeName(methodName)}_{argParts}";
+    }
+
+    /// <summary>
     /// Pass 0: Scan all method bodies for GenericInstanceType references.
     /// Collects unique generic instantiations (e.g., Wrapper`1&lt;System.Int32&gt;).
     /// </summary>
@@ -39,6 +57,9 @@ public partial class IRBuilder
                                 CollectGenericType(methodRef.ReturnType);
                             foreach (var p in methodRef.Parameters)
                                 CollectGenericType(p.ParameterType);
+                            // Collect generic method instantiations
+                            if (methodRef is GenericInstanceMethod gim)
+                                CollectGenericMethod(gim);
                             break;
                         case FieldReference fieldRef:
                             CollectGenericType(fieldRef.DeclaringType);
@@ -72,6 +93,105 @@ public partial class IRBuilder
 
         _genericInstantiations[key] = new GenericInstantiationInfo(
             openTypeName, typeArgs, mangledName, cecilOpenType);
+    }
+
+    private void CollectGenericMethod(GenericInstanceMethod gim)
+    {
+        var elementMethod = gim.ElementMethod;
+        var declaringType = elementMethod.DeclaringType.FullName;
+        var methodName = elementMethod.Name;
+
+        // Skip if any type argument is still a generic parameter (unresolved)
+        if (gim.GenericArguments.Any(a => a is GenericParameter))
+            return;
+
+        var typeArgs = gim.GenericArguments.Select(a => a.FullName).ToList();
+        var key = MakeGenericMethodKey(declaringType, methodName, typeArgs);
+        if (_genericMethodInstantiations.ContainsKey(key)) return;
+
+        var cecilMethod = elementMethod.Resolve();
+        if (cecilMethod == null) return;
+
+        var mangledName = MangleGenericMethodName(declaringType, methodName, typeArgs);
+
+        _genericMethodInstantiations[key] = new GenericMethodInstantiationInfo(
+            declaringType, methodName, typeArgs, mangledName, cecilMethod);
+    }
+
+    /// <summary>
+    /// Create specialized IRMethods for each generic method instantiation found in Pass 0.
+    /// </summary>
+    private void CreateGenericMethodSpecializations()
+    {
+        foreach (var (key, info) in _genericMethodInstantiations)
+        {
+            var cecilMethod = info.CecilMethod;
+
+            // Find the declaring IRType
+            if (!_typeCache.TryGetValue(info.DeclaringTypeName, out var declaringIrType))
+                continue;
+
+            // Build method-level type parameter map
+            var typeParamMap = new Dictionary<string, string>();
+            for (int i = 0; i < cecilMethod.GenericParameters.Count && i < info.TypeArguments.Count; i++)
+            {
+                typeParamMap[cecilMethod.GenericParameters[i].Name] = info.TypeArguments[i];
+            }
+
+            var returnTypeName = ResolveGenericTypeName(cecilMethod.ReturnType, typeParamMap);
+
+            var irMethod = new IRMethod
+            {
+                Name = cecilMethod.Name,
+                CppName = info.MangledName,
+                DeclaringType = declaringIrType,
+                ReturnTypeCpp = CppNameMapper.GetCppTypeForDecl(returnTypeName),
+                IsStatic = cecilMethod.IsStatic,
+                IsVirtual = cecilMethod.IsVirtual,
+                IsAbstract = cecilMethod.IsAbstract,
+                IsConstructor = cecilMethod.IsConstructor,
+                IsStaticConstructor = cecilMethod.IsConstructor && cecilMethod.IsStatic,
+                IsGenericInstance = true,
+            };
+
+            // Parameters
+            foreach (var paramDef in cecilMethod.Parameters)
+            {
+                var paramTypeName = ResolveGenericTypeName(paramDef.ParameterType, typeParamMap);
+                irMethod.Parameters.Add(new IRParameter
+                {
+                    Name = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                    CppName = paramDef.Name.Length > 0 ? paramDef.Name : $"p{paramDef.Index}",
+                    CppTypeName = CppNameMapper.GetCppTypeForDecl(paramTypeName),
+                    Index = paramDef.Index,
+                });
+            }
+
+            // Local variables
+            if (cecilMethod.HasBody)
+            {
+                foreach (var localDef in cecilMethod.Body.Variables)
+                {
+                    var localTypeName = ResolveGenericTypeName(localDef.VariableType, typeParamMap);
+                    irMethod.Locals.Add(new IRLocal
+                    {
+                        Index = localDef.Index,
+                        CppName = $"loc_{localDef.Index}",
+                        CppTypeName = CppNameMapper.GetCppTypeForDecl(localTypeName),
+                    });
+                }
+            }
+
+            declaringIrType.Methods.Add(irMethod);
+
+            // Convert method body with generic substitution context
+            // (not added to methodBodies — we convert immediately with the type param map)
+            if (cecilMethod.HasBody && !cecilMethod.IsAbstract)
+            {
+                var methodInfo = new IL.MethodInfo(cecilMethod);
+                ConvertMethodBodyWithGenerics(methodInfo, irMethod, typeParamMap);
+            }
+        }
     }
 
     /// <summary>
@@ -243,15 +363,6 @@ public partial class IRBuilder
     }
 
     /// <summary>
-    /// Resolve a Cecil TypeReference FullName through the active generic type param map.
-    /// </summary>
-    private string ResolveActiveGenericType(TypeReference typeRef)
-    {
-        if (_activeTypeParamMap == null) return typeRef.FullName;
-        return ResolveGenericTypeName(typeRef, _activeTypeParamMap);
-    }
-
-    /// <summary>
     /// Resolve a Cecil TypeReference to a cache key, handling GenericInstanceType.
     /// </summary>
     private string ResolveCacheKey(TypeReference typeRef)
@@ -272,21 +383,6 @@ public partial class IRBuilder
             return _activeTypeParamMap.TryGetValue(gp2.Name, out var resolved) ? resolved : typeRef.FullName;
 
         return typeRef.FullName;
-    }
-
-    /// <summary>
-    /// Get the C++ type name for a Cecil TypeReference, handling generics.
-    /// </summary>
-    private string GetCppTypeNameForRef(TypeReference typeRef)
-    {
-        var key = ResolveCacheKey(typeRef);
-        if (_typeCache.TryGetValue(key, out var irType))
-        {
-            if (irType.IsValueType)
-                return irType.CppName;
-            return irType.CppName + "*";
-        }
-        return CppNameMapper.GetCppTypeForDecl(key);
     }
 
     /// <summary>

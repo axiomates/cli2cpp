@@ -99,6 +99,7 @@ public class MethodInfo
     public bool IsConstructor => _method.IsConstructor;
     public bool HasBody => _method.HasBody;
 
+    public bool IsInternalCall => (_method.ImplAttributes & Mono.Cecil.MethodImplAttributes.InternalCall) != 0;
     public bool HasGenericParameters => _method.HasGenericParameters;
     public IReadOnlyList<string> GenericParameterNames =>
         _method.GenericParameters.Select(p => p.Name).ToList();

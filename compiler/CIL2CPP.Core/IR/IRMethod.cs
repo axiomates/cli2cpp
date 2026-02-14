@@ -38,6 +38,8 @@ public class IRMethod
     public bool IsEntryPoint { get; set; }
     public bool IsFinalizer { get; set; }
     public bool IsOperator { get; set; }
+    public bool IsGenericInstance { get; set; }
+    public bool IsInternalCall { get; set; }
     public string? OperatorName { get; set; }
     public int VTableSlot { get; set; } = -1;
 

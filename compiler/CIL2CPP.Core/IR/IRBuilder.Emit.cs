@@ -96,6 +96,24 @@ public partial class IRBuilder
         {
             irCall.FunctionName = mappedName;
         }
+        else if (methodRef is GenericInstanceMethod gim)
+        {
+            // Generic method instantiation — use the monomorphized name
+            var elemMethod = gim.ElementMethod;
+            var declType = elemMethod.DeclaringType.FullName;
+            var typeArgs = gim.GenericArguments.Select(a => a.FullName).ToList();
+            var key = MakeGenericMethodKey(declType, elemMethod.Name, typeArgs);
+
+            if (_genericMethodInstantiations.TryGetValue(key, out var gmInfo))
+            {
+                irCall.FunctionName = gmInfo.MangledName;
+            }
+            else
+            {
+                // Fallback: use the same mangling logic as CollectGenericMethod
+                irCall.FunctionName = MangleGenericMethodName(declType, elemMethod.Name, typeArgs);
+            }
+        }
         else
         {
             var typeCpp = GetMangledTypeNameForRef(methodRef.DeclaringType);

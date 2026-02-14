@@ -17,7 +17,6 @@ public partial class IRBuilder
         public const int ToStringSlot = 0;
         public const int EqualsSlot = 1;
         public const int GetHashCodeSlot = 2;
-        public const int Count = 3;
     }
 
     private readonly AssemblyReader _reader;
@@ -25,7 +24,7 @@ public partial class IRBuilder
     private readonly BuildConfiguration _config;
     private readonly Dictionary<string, IRType> _typeCache = new();
 
-    // Generic instantiation tracking
+    // Generic type instantiation tracking
     private readonly Dictionary<string, GenericInstantiationInfo> _genericInstantiations = new();
 
     private record GenericInstantiationInfo(
@@ -33,6 +32,17 @@ public partial class IRBuilder
         List<string> TypeArguments,
         string MangledName,
         TypeDefinition? CecilOpenType
+    );
+
+    // Generic method instantiation tracking
+    private readonly Dictionary<string, GenericMethodInstantiationInfo> _genericMethodInstantiations = new();
+
+    private record GenericMethodInstantiationInfo(
+        string DeclaringTypeName,
+        string MethodName,
+        List<string> TypeArguments,
+        string MangledName,
+        MethodDefinition CecilMethod
     );
 
     public IRBuilder(AssemblyReader reader, BuildConfiguration? config = null)
@@ -87,6 +97,7 @@ public partial class IRBuilder
         }
 
         // Pass 3: Create method shells (no body yet — needed for VTable)
+        // Skip open generic methods — they are templates, specialized in Pass 3.5
         var methodBodies = new List<(IL.MethodInfo MethodDef, IRMethod IRMethod)>();
         foreach (var typeDef in _reader.GetAllTypes())
         {
@@ -95,6 +106,9 @@ public partial class IRBuilder
             {
                 foreach (var methodDef in typeDef.Methods)
                 {
+                    // Skip open generic methods — they'll be monomorphized in Pass 3.5
+                    if (methodDef.HasGenericParameters) continue;
+
                     var irMethod = ConvertMethod(methodDef, irType);
                     irType.Methods.Add(irMethod);
 
@@ -109,12 +123,15 @@ public partial class IRBuilder
                     if (irMethod.IsFinalizer)
                         irType.Finalizer = irMethod;
 
-                    // Save for body conversion later
-                    if (methodDef.HasBody && !methodDef.IsAbstract)
+                    // Save for body conversion later (skip abstract and InternalCall)
+                    if (methodDef.HasBody && !methodDef.IsAbstract && !irMethod.IsInternalCall)
                         methodBodies.Add((methodDef, irMethod));
                 }
             }
         }
+
+        // Pass 3.5: Create specialized methods for each generic method instantiation
+        CreateGenericMethodSpecializations();
 
         // Pass 4: Build vtables (needs method shells with IsVirtual)
         foreach (var irType in _module.Types)

@@ -167,8 +167,12 @@ public class DisposableResource : IMyDisposable
     }
 }
 
-// Delegate type
+// Delegate types
 public delegate int MathOp(int a, int b);
+public delegate void VoidAction();
+public delegate int IntFunc(int x);
+public delegate void NotifyDelegate(int value);
+public delegate string StringFunc();
 
 // Generic class
 public class Wrapper<T>
@@ -237,6 +241,57 @@ public class Config
     }
 }
 
+// Event source class (exercises event add/remove + delegate invoke)
+public class EventSource
+{
+    public event NotifyDelegate OnNotify;
+
+    public void Subscribe(NotifyDelegate handler)
+    {
+        OnNotify += handler;
+    }
+
+    public void Unsubscribe(NotifyDelegate handler)
+    {
+        OnNotify -= handler;
+    }
+
+    public void Fire(int value)
+    {
+        if (OnNotify != null)
+            OnNotify(value);
+    }
+}
+
+// Utility class with generic METHODS (not generic class — exercises GenericInstanceMethod)
+public class GenericUtils
+{
+    public static T Identity<T>(T value)
+    {
+        return value;
+    }
+
+    public static void Swap<T>(ref T a, ref T b)
+    {
+        T temp = a;
+        a = b;
+        b = temp;
+    }
+}
+
+// Generic value type (exercises RegisterValueType for generic instances)
+public struct Pair<T>
+{
+    public T First;
+    public T Second;
+
+    public Pair(T first, T second)
+    {
+        First = first;
+        Second = second;
+    }
+}
+
 // Class with all field size types (exercises GetFieldSize for Int16/Char/Int64/Double)
 public class AllFieldTypes
 {
@@ -295,6 +350,14 @@ public class Program
         TestVirtualObjectDispatch();
         TestTypedArrays();
         TestGenericHelper();
+        TestLambda();
+        TestClosure();
+        TestEvents();
+        TestGenericMethods();
+        TestRefParams();
+        TestStaticFieldRef();
+        TestVirtualDelegate();
+        TestGenericStruct();
     }
 
     static void TestArithmetic()
@@ -806,5 +869,147 @@ public class Program
         string s2 = "second";
         strHelper.Swap(ref s1, ref s2);
         Console.WriteLine(s1); // second
+    }
+
+    // Exercises stateless lambda (generates <>c static display class with cached delegate)
+    static void TestLambda()
+    {
+        // Stateless lambda → C# compiler generates <>c singleton class + cached delegate
+        VoidAction greet = () => Console.WriteLine("Lambda!");
+        greet();
+
+        // Lambda with parameter
+        IntFunc doubler = (int x) => x * 2;
+        Console.WriteLine(doubler(21)); // 42
+
+        // Lambda passed as argument
+        int result = ApplyFunc(doubler, 10);
+        Console.WriteLine(result); // 20
+    }
+
+    static int ApplyFunc(IntFunc f, int arg)
+    {
+        return f(arg);
+    }
+
+    // Exercises closure / variable capture (generates <>c__DisplayClass with captured fields)
+    static void TestClosure()
+    {
+        int captured = 100;
+        IntFunc addCaptured = (int x) => x + captured;
+        Console.WriteLine(addCaptured(42)); // 142
+
+        // Multiple captures
+        int a = 10;
+        int b = 20;
+        VoidAction printSum = () => Console.WriteLine(a + b);
+        printSum(); // 30
+    }
+
+    // Exercises events (add_/remove_ methods + delegate backing field + invoke)
+    static void TestEvents()
+    {
+        var source = new EventSource();
+
+        // Subscribe with method reference
+        NotifyDelegate handler = OnNotified;
+        source.Subscribe(handler);
+
+        // Fire event
+        source.Fire(42); // prints "Notified: 42"
+
+        // Subscribe second handler
+        NotifyDelegate handler2 = OnNotified2;
+        source.Subscribe(handler2);
+        source.Fire(7); // prints "Notified: 7" then "Also notified: 7"
+
+        // Unsubscribe first handler
+        source.Unsubscribe(handler);
+        source.Fire(99); // prints only "Also notified: 99"
+    }
+
+    // Exercises generic METHOD instantiations (GenericInstanceMethod in Cecil)
+    static void TestGenericMethods()
+    {
+        // Identity<int> and Identity<string> — two instantiations of same generic method
+        int x = GenericUtils.Identity<int>(42);
+        Console.WriteLine(x); // 42
+
+        string s = GenericUtils.Identity<string>("hello");
+        Console.WriteLine(s); // hello
+
+        // Swap<int>
+        int a = 10;
+        int b = 20;
+        GenericUtils.Swap<int>(ref a, ref b);
+        Console.WriteLine(a); // 20
+        Console.WriteLine(b); // 10
+    }
+
+    static void OnNotified(int value)
+    {
+        Console.WriteLine(string.Concat("Notified: ", value.ToString()));
+    }
+
+    static void OnNotified2(int value)
+    {
+        Console.WriteLine(string.Concat("Also notified: ", value.ToString()));
+    }
+
+    // Non-generic ref int swap — exercises Ldind_I4, Stind_I4
+    static void SwapInt(ref int a, ref int b)
+    {
+        int temp = a;
+        a = b;
+        b = temp;
+    }
+
+    // Non-generic ref object swap — exercises Ldind_Ref, Stind_Ref
+    static void SwapObj(ref object a, ref object b)
+    {
+        object temp = a;
+        a = b;
+        b = temp;
+    }
+
+    // Exercises Ldind_I4, Stind_I4, Ldind_Ref, Stind_Ref via ref parameters
+    static void TestRefParams()
+    {
+        int x = 10;
+        int y = 20;
+        SwapInt(ref x, ref y);
+        Console.WriteLine(x); // 20
+        Console.WriteLine(y); // 10
+
+        object a = "first";
+        object b = "second";
+        SwapObj(ref a, ref b);
+        Console.WriteLine(a); // second
+        Console.WriteLine(b); // first
+    }
+
+    // Exercises Ldsflda (load address of static field for ref parameter)
+    static void TestStaticFieldRef()
+    {
+        int local = 50;
+        SwapInt(ref _globalValue, ref local);
+        Console.WriteLine(_globalValue); // 50
+        Console.WriteLine(local); // previous value of _globalValue
+    }
+
+    // Exercises Ldvirtftn (create delegate from virtual method)
+    static void TestVirtualDelegate()
+    {
+        Animal a = new Dog("Rex");
+        StringFunc speak = a.Speak; // generates ldvirtftn for virtual method
+        Console.WriteLine(speak()); // "Woof!"
+    }
+
+    // Exercises generic value type (RegisterValueType for generic instances)
+    static void TestGenericStruct()
+    {
+        var p = new Pair<int>(10, 20);
+        Console.WriteLine(p.First);  // 10
+        Console.WriteLine(p.Second); // 20
     }
 }
