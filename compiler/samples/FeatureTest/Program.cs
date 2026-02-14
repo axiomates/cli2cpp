@@ -191,6 +191,40 @@ public class Wrapper<T>
     }
 }
 
+// Generic class with array, ref param, and boxing operations (exercises generic type resolution)
+public class GenericHelper<T>
+{
+    private T[] _items;
+
+    public GenericHelper(int size)
+    {
+        _items = new T[size]; // newarr T (generic type in array creation)
+    }
+
+    public void Set(int index, T value)
+    {
+        _items[index] = value; // stelem with generic type
+    }
+
+    public T Get(int index)
+    {
+        return _items[index]; // ldelem with generic type
+    }
+
+    public int Count()
+    {
+        return _items.Length;
+    }
+
+    // Exercises ByReferenceType(GenericParameter) in ResolveGenericTypeName
+    public void Swap(ref T a, ref T b)
+    {
+        T temp = a;
+        a = b;
+        b = temp;
+    }
+}
+
 // Class with readonly field (IsInitOnly)
 public class Config
 {
@@ -201,6 +235,17 @@ public class Config
     {
         Name = name;
     }
+}
+
+// Class with all field size types (exercises GetFieldSize for Int16/Char/Int64/Double)
+public class AllFieldTypes
+{
+    public short ShortField;
+    public char CharField;
+    public long LongField;
+    public double DoubleField;
+    public byte ByteField;
+    public float FloatField;
 }
 
 public class Program
@@ -242,6 +287,14 @@ public class Program
         TestUsing();
         TestDelegate();
         TestGenerics();
+        TestRethrow();
+        TestSpecialFloats();
+        TestDelegateCombine();
+        TestMathAbsOverloads();
+        TestAllFieldTypes();
+        TestVirtualObjectDispatch();
+        TestTypedArrays();
+        TestGenericHelper();
     }
 
     static void TestArithmetic()
@@ -606,5 +659,152 @@ public class Program
 
         var strW = new Wrapper<string>("Hello");
         Console.WriteLine(strW.GetValue()); // Hello
+    }
+
+    // Exercises 'rethrow' IL instruction
+    static void TestRethrow()
+    {
+        try
+        {
+            try
+            {
+                throw new Exception("inner");
+            }
+            catch
+            {
+                throw; // rethrow instruction
+            }
+        }
+        catch (Exception e)
+        {
+            Console.WriteLine("Rethrown");
+        }
+    }
+
+    // Exercises float/double NaN and Infinity constants (ldc.r4/ldc.r8 special values)
+    static void TestSpecialFloats()
+    {
+        float fnan = float.NaN;
+        float fposInf = float.PositiveInfinity;
+        float fnegInf = float.NegativeInfinity;
+        double dnan = double.NaN;
+        double dposInf = double.PositiveInfinity;
+        double dnegInf = double.NegativeInfinity;
+        Console.WriteLine(fnan);
+        Console.WriteLine(fposInf);
+        Console.WriteLine(dnan);
+        Console.WriteLine(dnegInf);
+    }
+
+    // Exercises Delegate.Combine and Delegate.Remove BCL mapping
+    static void TestDelegateCombine()
+    {
+        MathOp d1 = StaticAdd;
+        MathOp d2 = StaticAdd;
+        MathOp combined = d1 + d2;    // Delegate.Combine
+        MathOp removed = combined - d2; // Delegate.Remove
+        Console.WriteLine(removed(1, 2)); // 3
+    }
+
+    // Exercises Math.Abs overloads (float, double, int)
+    static void TestMathAbsOverloads()
+    {
+        float f = -3.14f;
+        double d = -2.718;
+        int i = -42;
+        Console.WriteLine(Math.Abs(f));  // fabsf
+        Console.WriteLine(Math.Abs(d));  // fabs
+        Console.WriteLine(Math.Abs(i));  // abs
+    }
+
+    // Exercises AllFieldTypes with Int16/Char/Int64/Double fields
+    static void TestAllFieldTypes()
+    {
+        var obj = new AllFieldTypes();
+        obj.ShortField = 10;
+        obj.CharField = 'A';
+        obj.LongField = 123456789L;
+        obj.DoubleField = 3.14;
+        obj.ByteField = 255;
+        obj.FloatField = 1.5f;
+        Console.WriteLine(obj.ShortField);
+        Console.WriteLine(obj.LongField);
+    }
+
+    // Exercises virtual dispatch on System.Object methods (ToString/GetHashCode/Equals)
+    // These go through the System.Object vtable fallback path when called virtually
+    static void TestVirtualObjectDispatch()
+    {
+        // Using a local Dog typed as object forces callvirt on System.Object
+        object obj = new Dog("Sparky");
+        // These are callvirt System.Object::ToString(), etc.
+        string s = obj.ToString();
+        int h = obj.GetHashCode();
+        bool eq = obj.Equals(obj);
+        Console.WriteLine(s);
+        Console.WriteLine(h);
+    }
+
+    // Exercises ldelem/stelem for all element type variants
+    static void TestTypedArrays()
+    {
+        // Create arrays of different types
+        byte[] bytes = new byte[2];
+        short[] shorts = new short[2];
+        long[] longs = new long[2];
+        float[] floats = new float[2];
+        double[] doubles = new double[2];
+        object[] objects = new object[2];
+
+        // Store elements (exercises stelem.i1, stelem.i2, stelem.i8, stelem.r4, stelem.r8, stelem.ref)
+        bytes[0] = 42;
+        shorts[0] = 1000;
+        longs[0] = 123456789L;
+        floats[0] = 3.14f;
+        doubles[0] = 2.718;
+        objects[0] = "hello";
+
+        // Load elements (exercises ldelem.u1, ldelem.i2, ldelem.i8, ldelem.r4, ldelem.r8, ldelem.ref)
+        byte b = bytes[0];
+        short s = shorts[0];
+        long l = longs[0];
+        float f = floats[0];
+        double d = doubles[0];
+        object o = objects[0];
+
+        Console.WriteLine(b);
+        Console.WriteLine(s);
+        Console.WriteLine(l);
+        Console.WriteLine(f);
+        Console.WriteLine(d);
+        Console.WriteLine(o);
+    }
+
+    // Exercises GenericHelper<T> with array operations and ref params in generic context
+    static void TestGenericHelper()
+    {
+        var intHelper = new GenericHelper<int>(3);
+        intHelper.Set(0, 10);
+        intHelper.Set(1, 20);
+        intHelper.Set(2, 30);
+        Console.WriteLine(intHelper.Get(0)); // 10
+        Console.WriteLine(intHelper.Count()); // 3
+
+        // Test Swap with ref parameters (exercises ByReferenceType in generic resolution)
+        int x = 100;
+        int y = 200;
+        intHelper.Swap(ref x, ref y);
+        Console.WriteLine(x); // 200
+        Console.WriteLine(y); // 100
+
+        var strHelper = new GenericHelper<string>(2);
+        strHelper.Set(0, "hello");
+        strHelper.Set(1, "world");
+        Console.WriteLine(strHelper.Get(0)); // hello
+
+        string s1 = "first";
+        string s2 = "second";
+        strHelper.Swap(ref s1, ref s2);
+        Console.WriteLine(s1); // second
     }
 }
