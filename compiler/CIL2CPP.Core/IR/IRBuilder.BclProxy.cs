@@ -64,6 +64,10 @@ public partial class IRBuilder
             new BclMethodSpec("get_IsSynchronized", "System.Boolean", Array.Empty<string>()),
             new BclMethodSpec("CopyTo", "System.Void", new[] { "System.Array", "System.Int32" }),
         }),
+        ["System.IAsyncDisposable"] = new("System", "IAsyncDisposable", new[]
+        {
+            new BclMethodSpec("DisposeAsync", "System.Threading.Tasks.ValueTask", Array.Empty<string>()),
+        }),
     };
 
     /// <summary>
@@ -105,6 +109,15 @@ public partial class IRBuilder
             new BclMethodSpec("IndexOf", "System.Int32", new[] { "T" }),
             new BclMethodSpec("Insert", "System.Void", new[] { "System.Int32", "T" }),
             new BclMethodSpec("RemoveAt", "System.Void", new[] { "System.Int32" }),
+        }, IsGeneric: true, GenericArity: 1),
+        ["System.Collections.Generic.IAsyncEnumerable`1"] = new("System.Collections.Generic", "IAsyncEnumerable", new[]
+        {
+            new BclMethodSpec("GetAsyncEnumerator", "System.Collections.Generic.IAsyncEnumerator`1<T>", new[] { "System.Threading.CancellationToken" }),
+        }, IsGeneric: true, GenericArity: 1),
+        ["System.Collections.Generic.IAsyncEnumerator`1"] = new("System.Collections.Generic", "IAsyncEnumerator", new[]
+        {
+            new BclMethodSpec("MoveNextAsync", "System.Threading.Tasks.ValueTask`1<System.Boolean>", Array.Empty<string>()),
+            new BclMethodSpec("get_Current", "T", Array.Empty<string>()),
         }, IsGeneric: true, GenericArity: 1),
     };
 
@@ -235,6 +248,12 @@ public partial class IRBuilder
                     type.Interfaces.Add(iEnumerator);
                 if (_typeCache.TryGetValue("System.IDisposable", out var iDisposable))
                     type.Interfaces.Add(iDisposable);
+            }
+            // IAsyncEnumerator<T> extends IAsyncDisposable
+            else if (type.ILFullName.StartsWith("System.Collections.Generic.IAsyncEnumerator`1<"))
+            {
+                if (_typeCache.TryGetValue("System.IAsyncDisposable", out var iAsyncDisposable))
+                    type.Interfaces.Add(iAsyncDisposable);
             }
         }
     }

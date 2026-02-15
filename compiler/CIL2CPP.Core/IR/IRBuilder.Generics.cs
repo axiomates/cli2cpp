@@ -248,7 +248,9 @@ public partial class IRBuilder
             var isAsyncBcl = IsAsyncBclGenericType(info.OpenTypeName);
             var isSpanBcl = IsSpanBclGenericType(info.OpenTypeName);
             var isCollectionBcl = IsCollectionBclGenericType(info.OpenTypeName);
-            var isSyntheticBcl = isAsyncBcl || isSpanBcl || isCollectionBcl;
+            var isCancellationBcl = IsCancellationBclGenericType(info.OpenTypeName);
+            var isAsyncEnumerableBcl = IsAsyncEnumerableBclGenericType(info.OpenTypeName);
+            var isSyntheticBcl = isAsyncBcl || isSpanBcl || isCollectionBcl || isCancellationBcl || isAsyncEnumerableBcl;
 
             // Skip types we can't resolve — except synthetic BCL types
             if (info.CecilOpenType == null && !isSyntheticBcl) continue;
@@ -275,6 +277,16 @@ public partial class IRBuilder
                         typeParamMap["TKey"] = info.TypeArguments[0];
                         typeParamMap["TValue"] = info.TypeArguments[1];
                     }
+                }
+                else if (isCancellationBcl)
+                {
+                    // TaskCompletionSource<T> has a single generic param "TResult"
+                    typeParamMap["TResult"] = info.TypeArguments[0];
+                }
+                else if (isAsyncEnumerableBcl)
+                {
+                    // ValueTask<T>, ManualResetValueTaskSourceCore<T>, ValueTaskAwaiter<T>
+                    typeParamMap["TResult"] = info.TypeArguments[0];
                 }
                 else
                 {
@@ -303,6 +315,22 @@ public partial class IRBuilder
                 isValueType = false;
                 namespaceName = "System.Collections.Generic";
             }
+            else if (isCancellationBcl)
+            {
+                // TaskCompletionSource<T> is a reference type
+                isValueType = false;
+                namespaceName = "System.Threading.Tasks";
+            }
+            else if (isAsyncEnumerableBcl)
+            {
+                // ValueTask<T>, ManualResetValueTaskSourceCore<T>, ValueTaskAwaiter<T> are all value types
+                isValueType = true;
+                namespaceName = info.OpenTypeName.Contains("CompilerServices")
+                    ? "System.Runtime.CompilerServices"
+                    : info.OpenTypeName.Contains("Sources")
+                        ? "System.Threading.Tasks.Sources"
+                        : "System.Threading.Tasks";
+            }
             else
             {
                 // Async BCL: TaskAwaiter<T> and AsyncTaskMethodBuilder<T> are value types
@@ -311,6 +339,8 @@ public partial class IRBuilder
                     ? "System.Runtime.CompilerServices"
                     : "System.Threading.Tasks";
             }
+
+            var isDelegate = openType?.BaseType?.FullName is "System.MulticastDelegate" or "System.Delegate";
 
             var irType = new IRType
             {
@@ -323,6 +353,7 @@ public partial class IRBuilder
                 IsAbstract = openType?.IsAbstract ?? false,
                 IsSealed = openType?.IsSealed ?? true,
                 IsGenericInstance = true,
+                IsDelegate = isDelegate,
                 GenericArguments = info.TypeArguments,
                 IsRuntimeProvided = isSyntheticBcl && !isCollectionBcl,
                 SourceKind = isSyntheticBcl ? AssemblyKind.BCL
@@ -376,6 +407,17 @@ public partial class IRBuilder
                 else if (info.OpenTypeName.StartsWith("System.Collections.Generic.Dictionary`"))
                     irType.Fields.AddRange(CreateDictionarySyntheticFields(irType));
             }
+            else if (isCancellationBcl)
+            {
+                // TaskCompletionSource<T>: holds a Task<T>*
+                var tResult = typeParamMap.GetValueOrDefault("TResult", "System.Int32");
+                var taskKey = $"System.Threading.Tasks.Task`1<{tResult}>";
+                irType.Fields.Add(MakeSyntheticField("_task", taskKey, irType));
+            }
+            else if (isAsyncEnumerableBcl)
+            {
+                irType.Fields.AddRange(CreateAsyncEnumerableSyntheticFields(info.OpenTypeName, irType, typeParamMap));
+            }
             else
             {
                 foreach (var fieldDef in openType!.Fields)
@@ -404,8 +446,8 @@ public partial class IRBuilder
             _module.Types.Add(irType);
             _typeCache[key] = irType;
 
-            // Methods: skip entirely for async/collection BCL types (all calls are intercepted)
-            if (openType != null && !isAsyncBcl && !isCollectionBcl)
+            // Methods: skip entirely for async/collection/cancellation/async-enumerable BCL types (all calls are intercepted)
+            if (openType != null && !isAsyncBcl && !isCollectionBcl && !isCancellationBcl && !isAsyncEnumerableBcl)
             {
                 foreach (var methodDef in openType.Methods)
                 {
@@ -461,9 +503,12 @@ public partial class IRBuilder
 
                     // Convert method body with generic substitution context
                     // Skip BCL generic types — their method calls are intercepted instead
+                    // In MA mode, Nullable compiles from IL (interceptions bypassed)
                     var isBclGeneric = info.OpenTypeName.StartsWith("System.Nullable`")
                         || info.OpenTypeName.StartsWith("System.ValueTuple`")
                         || IsEqualityComparerBclGenericType(info.OpenTypeName);
+                    if (_assemblySet != null && info.OpenTypeName.StartsWith("System.Nullable`"))
+                        isBclGeneric = false;
                     if (!isBclGeneric && methodDef.HasBody && !methodDef.IsAbstract)
                     {
                         var methodInfo = new IL.MethodInfo(methodDef);

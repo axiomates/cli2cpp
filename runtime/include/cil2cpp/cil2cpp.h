@@ -20,14 +20,18 @@
 #include "checked.h"
 #include "task.h"
 #include "threadpool.h"
+#include "cancellation.h"
+#include "async_enumerable.h"
 #include "threading.h"
 #include "reflection.h"
+#include "memberinfo.h"
 #include "collections.h"
 
 // BCL types
 #include "bcl/System.Object.h"
 #include "bcl/System.String.h"
 #include "bcl/System.Console.h"
+#include "bcl/System.IO.h"
 
 namespace cil2cpp {
 
@@ -43,6 +47,13 @@ void runtime_init();
  */
 void runtime_shutdown();
 
+} // namespace cil2cpp
+
+// Math helpers for Sign (no std:: equivalent)
+namespace cil2cpp {
+inline int32_t math_sign_i32(int32_t x) { return (x > 0) - (x < 0); }
+inline int32_t math_sign_i64(int64_t x) { return (x > 0) - (x < 0); }
+inline int32_t math_sign_f64(double x) { return (x > 0.0) - (x < 0.0); }
 } // namespace cil2cpp
 
 // System.Object methods (used by generated code)

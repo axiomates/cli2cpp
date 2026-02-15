@@ -1,6 +1,7 @@
 using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.Linq;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -695,6 +696,72 @@ public class Program
         TestListString();
         TestDictionaryStringInt();
         TestAsyncConcurrency();
+        TestAsyncEnumerable();
+        TestReflectionAdvanced();
+    }
+
+    static void TestAsyncEnumerable()
+    {
+        // await foreach with async iterator
+        var sumTask = AsyncEnumerableHelper.SumRangeAsync();
+        sumTask.Wait();
+        Console.WriteLine(sumTask.Result); // 15
+
+        var joinTask = AsyncEnumerableHelper.JoinFilteredAsync();
+        joinTask.Wait();
+        Console.WriteLine(joinTask.Result); // 5,8,7
+    }
+
+    static void TestReflectionAdvanced()
+    {
+        // Test Type.GetMethods()
+        var dogType = typeof(Dog);
+        var methods = dogType.GetMethods();
+        Console.WriteLine(methods.Length > 0); // True — has at least .ctor and Speak
+
+        // Test Type.GetMethod(string)
+        var speakMethod = dogType.GetMethod("Speak");
+        Console.WriteLine(speakMethod != null); // True
+        Console.WriteLine(speakMethod.Name); // Speak
+        Console.WriteLine(speakMethod.IsPublic); // True
+        Console.WriteLine(speakMethod.IsVirtual); // True
+        Console.WriteLine(speakMethod.IsStatic); // False
+
+        // Test Type.GetFields()
+        var animalType = typeof(Animal);
+        var fields = animalType.GetFields();
+        // Animal has _name (protected) and _count (private static) — field count depends on codegen
+        Console.WriteLine(fields != null); // True
+
+        // Test Type.GetField(string)
+        var nameField = animalType.GetField("_name");
+        if (nameField != null)
+        {
+            Console.WriteLine(nameField.Name); // _name
+            Console.WriteLine(nameField.IsStatic); // False
+        }
+
+        // Test MethodInfo.DeclaringType
+        if (speakMethod != null)
+        {
+            var declType = speakMethod.DeclaringType;
+            Console.WriteLine(declType.Name); // Dog
+        }
+
+        // Test MethodInfo.ToString()
+        if (speakMethod != null)
+        {
+            var str = speakMethod.ToString();
+            Console.WriteLine(str.Length > 0); // True
+        }
+
+        // Test MethodInfo.GetParameters()
+        var ctorMethod = animalType.GetMethod(".ctor");
+        if (ctorMethod != null)
+        {
+            var parms = ctorMethod.GetParameters();
+            Console.WriteLine(parms.Length); // 1 (String name)
+        }
     }
 
     static void TestArithmetic()
@@ -2182,6 +2249,201 @@ public class Program
         var computeTask = ComputeAsync(10);
         Console.WriteLine(computeTask.Result); // 20
     }
+
+    // ===== CancellationToken / TaskCompletionSource =====
+
+    public static bool TestCancellationTokenDefault()
+    {
+        var token = CancellationToken.None;
+        return !token.IsCancellationRequested && !token.CanBeCanceled;
+    }
+
+    public static bool TestCancellationTokenSourceCreate()
+    {
+        var cts = new CancellationTokenSource();
+        var token = cts.Token;
+        bool notCanceled = !token.IsCancellationRequested;
+        cts.Cancel();
+        bool canceled = token.IsCancellationRequested;
+        return notCanceled && canceled;
+    }
+
+    public static bool TestCancellationTokenSourceDispose()
+    {
+        var cts = new CancellationTokenSource();
+        cts.Dispose();
+        return true; // no exception = success
+    }
+
+    public static async Task<int> TestTaskCompletionSourceAsync()
+    {
+        var tcs = new TaskCompletionSource<int>();
+        tcs.SetResult(42);
+        return await tcs.Task;
+    }
+
+    // ===== LINQ Extension Methods =====
+
+    public static int LinqCount()
+    {
+        int[] nums = { 1, 2, 3, 4, 5 };
+        return nums.Count(); // 5
+    }
+
+    public static int LinqCountPredicate()
+    {
+        int[] nums = { 1, 2, 3, 4, 5 };
+        return nums.Count(x => x > 3); // 2
+    }
+
+    public static bool LinqAny()
+    {
+        int[] nums = { 1, 2, 3 };
+        return nums.Any(); // true
+    }
+
+    public static bool LinqAnyPredicate()
+    {
+        int[] nums = { 1, 2, 3, 4, 5 };
+        return nums.Any(x => x > 4); // true
+    }
+
+    public static bool LinqAll()
+    {
+        int[] nums = { 2, 4, 6, 8 };
+        return nums.All(x => x % 2 == 0); // true
+    }
+
+    public static int LinqFirst()
+    {
+        int[] nums = { 10, 20, 30 };
+        return nums.First(); // 10
+    }
+
+    public static int LinqFirstOrDefault()
+    {
+        int[] nums = {};
+        return nums.FirstOrDefault(); // 0
+    }
+
+    public static int LinqSum()
+    {
+        int[] nums = { 1, 2, 3, 4, 5 };
+        return nums.Sum(); // 15
+    }
+
+    public static int LinqMin()
+    {
+        int[] nums = { 3, 1, 4, 1, 5 };
+        return nums.Min(); // 1
+    }
+
+    public static int LinqMax()
+    {
+        int[] nums = { 3, 1, 4, 1, 5 };
+        return nums.Max(); // 5
+    }
+
+    public static bool LinqContains()
+    {
+        int[] nums = { 1, 2, 3, 4, 5 };
+        return nums.Contains(3); // true
+    }
+
+    // ── String operations ─────────────────────────────────
+
+    public static string StringFormat()
+    {
+        return string.Format("Hello {0}, you are {1}", "World", 42);
+    }
+
+    public static string StringFormatSingle()
+    {
+        return string.Format("Value: {0}", 123);
+    }
+
+    public static int StringIndexOf()
+    {
+        string s = "Hello World";
+        return s.IndexOf('W'); // 6
+    }
+
+    public static bool StringContains()
+    {
+        string s = "Hello World";
+        return s.Contains('W'); // true
+    }
+
+    public static bool StringStartsWith()
+    {
+        string s = "Hello World";
+        return s.StartsWith("Hello"); // true
+    }
+
+    public static string StringToUpper()
+    {
+        string s = "hello";
+        return s.ToUpper(); // "HELLO"
+    }
+
+    public static string StringTrim()
+    {
+        string s = "  hello  ";
+        return s.Trim(); // "hello"
+    }
+
+    public static string StringReplace()
+    {
+        string s = "Hello World";
+        return s.Replace('o', '0'); // "Hell0 W0rld"
+    }
+
+    public static int StringLastIndexOf()
+    {
+        string s = "Hello World";
+        return s.LastIndexOf('l'); // 9
+    }
+
+    // ── System.IO ──────────────────────────────────────
+
+    public static bool FileWriteAndRead()
+    {
+        string path = "test_io_temp.txt";
+        System.IO.File.WriteAllText(path, "Hello, File!");
+        string content = System.IO.File.ReadAllText(path);
+        System.IO.File.Delete(path);
+        return content == "Hello, File!";
+    }
+
+    public static bool FileExists()
+    {
+        string path = "test_io_exists.txt";
+        System.IO.File.WriteAllText(path, "exists");
+        bool exists = System.IO.File.Exists(path);
+        System.IO.File.Delete(path);
+        bool notExists = !System.IO.File.Exists(path);
+        return exists && notExists;
+    }
+
+    public static string PathCombine()
+    {
+        return System.IO.Path.Combine("folder", "file.txt");
+    }
+
+    public static string PathGetFileName()
+    {
+        return System.IO.Path.GetFileName("/some/dir/file.txt");
+    }
+
+    public static string PathGetExtension()
+    {
+        return System.IO.Path.GetExtension("file.cs");
+    }
+
+    public static string PathGetDirectoryName()
+    {
+        return System.IO.Path.GetDirectoryName("/some/dir/file.txt");
+    }
 }
 
 // Custom attribute for testing
@@ -2532,5 +2794,53 @@ public static class IteratorTest
             result = result + s;
         }
         return result; // "hello,greetings"
+    }
+}
+
+// ── IAsyncEnumerable / await foreach ─────────────────────
+public static class AsyncEnumerableHelper
+{
+    // Simple async iterator yielding 1..n
+    public static async IAsyncEnumerable<int> RangeAsync(int start, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            await Task.CompletedTask; // simulate async work
+            yield return start + i;
+        }
+    }
+
+    // await foreach consumer
+    public static async Task<int> SumRangeAsync()
+    {
+        int sum = 0;
+        await foreach (var n in RangeAsync(1, 5))
+        {
+            sum += n;
+        }
+        return sum; // 1+2+3+4+5 = 15
+    }
+
+    // Async iterator with filtering
+    public static async IAsyncEnumerable<int> FilterAsync(int[] items, int min)
+    {
+        foreach (var item in items)
+        {
+            await Task.CompletedTask;
+            if (item >= min)
+                yield return item;
+        }
+    }
+
+    public static async Task<string> JoinFilteredAsync()
+    {
+        var items = new int[] { 1, 5, 3, 8, 2, 7 };
+        string result = "";
+        await foreach (var n in FilterAsync(items, 5))
+        {
+            if (result.Length > 0) result = result + ",";
+            result = result + n.ToString();
+        }
+        return result; // "5,8,7"
     }
 }

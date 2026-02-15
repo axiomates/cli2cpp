@@ -271,7 +271,7 @@ public partial class IRBuilder
                     var awaiterDeref = awaiterAddr.StartsWith("&") ? $"({awaiterAddr})" : awaiterAddr;
                     block.Instructions.Add(new IRRawCpp
                     {
-                        Code = $"cil2cpp::task_add_continuation({awaiterDeref}->f_task, " +
+                        Code = $"cil2cpp::task_add_continuation(reinterpret_cast<cil2cpp::Task*>({awaiterDeref}->f_task), " +
                                $"reinterpret_cast<void(*)(void*)>(&{moveNextName}), " +
                                $"static_cast<void*>({smArg}));"
                     });
@@ -306,7 +306,7 @@ public partial class IRBuilder
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"auto {tmp} = cil2cpp::task_is_completed({thisArg}->f_task);"
+                    Code = $"auto {tmp} = cil2cpp::task_is_completed(reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task));"
                 });
                 stack.Push(tmp);
                 return true;
@@ -317,12 +317,12 @@ public partial class IRBuilder
                 // Wait for the task to complete (blocks if still pending)
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"cil2cpp::task_wait({thisArg}->f_task);"
+                    Code = $"cil2cpp::task_wait(reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task));"
                 });
                 // Check for faulted task and rethrow exception
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"if ({thisArg}->f_task && {thisArg}->f_task->f_status == 2 && {thisArg}->f_task->f_exception) cil2cpp::throw_exception({thisArg}->f_task->f_exception);"
+                    Code = $"if ({thisArg}->f_task && reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task)->f_status == 2 && reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task)->f_exception) cil2cpp::throw_exception(reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task)->f_exception);"
                 });
                 if (isGeneric)
                 {

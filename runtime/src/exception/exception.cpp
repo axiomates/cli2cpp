@@ -31,9 +31,25 @@ extern TypeInfo NullReferenceException_TypeInfo;
 extern TypeInfo IndexOutOfRangeException_TypeInfo;
 extern TypeInfo InvalidCastException_TypeInfo;
 extern TypeInfo InvalidOperationException_TypeInfo;
+extern TypeInfo ObjectDisposedException_TypeInfo;
+extern TypeInfo NotSupportedException_TypeInfo;
+extern TypeInfo PlatformNotSupportedException_TypeInfo;
+extern TypeInfo NotImplementedException_TypeInfo;
 extern TypeInfo ArgumentException_TypeInfo;
 extern TypeInfo ArgumentNullException_TypeInfo;
+extern TypeInfo ArgumentOutOfRangeException_TypeInfo;
+extern TypeInfo ArithmeticException_TypeInfo;
 extern TypeInfo OverflowException_TypeInfo;
+extern TypeInfo DivideByZeroException_TypeInfo;
+extern TypeInfo FormatException_TypeInfo;
+extern TypeInfo RankException_TypeInfo;
+extern TypeInfo ArrayTypeMismatchException_TypeInfo;
+extern TypeInfo TypeInitializationException_TypeInfo;
+extern TypeInfo TimeoutException_TypeInfo;
+extern TypeInfo AggregateException_TypeInfo;
+extern TypeInfo OperationCanceledException_TypeInfo;
+extern TypeInfo TaskCanceledException_TypeInfo;
+extern TypeInfo KeyNotFoundException_TypeInfo;
 
 [[noreturn]] void throw_exception(Exception* ex) {
     if (g_exception_context) {
@@ -111,6 +127,86 @@ static Exception* create_exception(TypeInfo* type, const char* message) {
 [[noreturn]] void throw_argument() {
     Exception* ex = create_exception(&ArgumentException_TypeInfo,
                                       "Value does not fall within the expected range.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_argument_out_of_range() {
+    Exception* ex = create_exception(&ArgumentOutOfRangeException_TypeInfo,
+                                      "Specified argument was out of the range of valid values.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_not_supported() {
+    Exception* ex = create_exception(&NotSupportedException_TypeInfo,
+                                      "Specified method is not supported.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_not_implemented() {
+    Exception* ex = create_exception(&NotImplementedException_TypeInfo,
+                                      "The method or operation is not implemented.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_format() {
+    Exception* ex = create_exception(&FormatException_TypeInfo,
+                                      "Input string was not in a correct format.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_divide_by_zero() {
+    Exception* ex = create_exception(&DivideByZeroException_TypeInfo,
+                                      "Attempted to divide by zero.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_object_disposed() {
+    Exception* ex = create_exception(&ObjectDisposedException_TypeInfo,
+                                      "Cannot access a disposed object.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_key_not_found() {
+    Exception* ex = create_exception(&KeyNotFoundException_TypeInfo,
+                                      "The given key was not present in the dictionary.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_timeout() {
+    Exception* ex = create_exception(&TimeoutException_TypeInfo,
+                                      "The operation has timed out.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_rank() {
+    Exception* ex = create_exception(&RankException_TypeInfo,
+                                      "Attempted to operate on an array with the wrong number of dimensions.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_array_type_mismatch() {
+    Exception* ex = create_exception(&ArrayTypeMismatchException_TypeInfo,
+                                      "Attempted to access an element as a type incompatible with the array.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_type_initialization(const char* type_name) {
+    char buf[256];
+    snprintf(buf, sizeof(buf), "The type initializer for '%s' threw an exception.",
+             type_name ? type_name : "<unknown>");
+    Exception* ex = create_exception(&TypeInitializationException_TypeInfo, buf);
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_operation_canceled() {
+    Exception* ex = create_exception(&OperationCanceledException_TypeInfo,
+                                      "The operation was canceled.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_platform_not_supported() {
+    Exception* ex = create_exception(&PlatformNotSupportedException_TypeInfo,
+                                      "Operation is not supported on this platform.");
     throw_exception(ex);
 }
 
@@ -248,7 +344,7 @@ TypeInfo NullReferenceException_TypeInfo = {
     .name = "NullReferenceException",
     .namespace_name = "System",
     .full_name = "System.NullReferenceException",
-    .base_type = nullptr,  // TODO: link to Exception type
+    .base_type = &Exception_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(NullReferenceException),
@@ -269,7 +365,7 @@ TypeInfo IndexOutOfRangeException_TypeInfo = {
     .name = "IndexOutOfRangeException",
     .namespace_name = "System",
     .full_name = "System.IndexOutOfRangeException",
-    .base_type = nullptr,
+    .base_type = &Exception_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(IndexOutOfRangeException),
@@ -290,7 +386,7 @@ TypeInfo InvalidCastException_TypeInfo = {
     .name = "InvalidCastException",
     .namespace_name = "System",
     .full_name = "System.InvalidCastException",
-    .base_type = nullptr,
+    .base_type = &Exception_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(InvalidCastException),
@@ -311,7 +407,7 @@ TypeInfo InvalidOperationException_TypeInfo = {
     .name = "InvalidOperationException",
     .namespace_name = "System",
     .full_name = "System.InvalidOperationException",
-    .base_type = nullptr,
+    .base_type = &Exception_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(InvalidOperationException),
@@ -374,7 +470,7 @@ TypeInfo OverflowException_TypeInfo = {
     .name = "OverflowException",
     .namespace_name = "System",
     .full_name = "System.OverflowException",
-    .base_type = &Exception_TypeInfo,
+    .base_type = &ArithmeticException_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(OverflowException),
@@ -390,5 +486,70 @@ TypeInfo OverflowException_TypeInfo = {
     .interface_vtables = nullptr,
     .interface_vtable_count = 0,
 };
+
+// --- New exception TypeInfos ---
+
+#define EXCEPTION_TYPEINFO(CppName, Ns, FullName, BaseName) \
+TypeInfo CppName##_TypeInfo = { \
+    .name = #CppName, \
+    .namespace_name = Ns, \
+    .full_name = FullName, \
+    .base_type = &BaseName##_TypeInfo, \
+    .interfaces = nullptr, \
+    .interface_count = 0, \
+    .instance_size = sizeof(CppName), \
+    .element_size = 0, \
+    .flags = TypeFlags::None, \
+    .vtable = nullptr, \
+    .fields = nullptr, \
+    .field_count = 0, \
+    .methods = nullptr, \
+    .method_count = 0, \
+    .default_ctor = nullptr, \
+    .finalizer = nullptr, \
+    .interface_vtables = nullptr, \
+    .interface_vtable_count = 0, \
+};
+
+EXCEPTION_TYPEINFO(ArithmeticException,             "System", "System.ArithmeticException",             Exception)
+EXCEPTION_TYPEINFO(DivideByZeroException,           "System", "System.DivideByZeroException",           ArithmeticException)
+EXCEPTION_TYPEINFO(NotSupportedException,           "System", "System.NotSupportedException",           Exception)
+EXCEPTION_TYPEINFO(PlatformNotSupportedException,   "System", "System.PlatformNotSupportedException",   NotSupportedException)
+EXCEPTION_TYPEINFO(NotImplementedException,         "System", "System.NotImplementedException",         Exception)
+EXCEPTION_TYPEINFO(ObjectDisposedException,         "System", "System.ObjectDisposedException",         InvalidOperationException)
+EXCEPTION_TYPEINFO(ArgumentOutOfRangeException,     "System", "System.ArgumentOutOfRangeException",     ArgumentException)
+EXCEPTION_TYPEINFO(FormatException,                 "System", "System.FormatException",                 Exception)
+EXCEPTION_TYPEINFO(RankException,                   "System", "System.RankException",                   Exception)
+EXCEPTION_TYPEINFO(ArrayTypeMismatchException,      "System", "System.ArrayTypeMismatchException",      Exception)
+EXCEPTION_TYPEINFO(TypeInitializationException,     "System", "System.TypeInitializationException",     Exception)
+EXCEPTION_TYPEINFO(TimeoutException,                "System", "System.TimeoutException",                Exception)
+EXCEPTION_TYPEINFO(AggregateException,              "System", "System.AggregateException",              Exception)
+EXCEPTION_TYPEINFO(OperationCanceledException,      "System", "System.OperationCanceledException",      Exception)
+EXCEPTION_TYPEINFO(TaskCanceledException,           "System.Threading.Tasks", "System.Threading.Tasks.TaskCanceledException", OperationCanceledException)
+EXCEPTION_TYPEINFO(KeyNotFoundException,            "System.Collections.Generic", "System.Collections.Generic.KeyNotFoundException", Exception)
+EXCEPTION_TYPEINFO(IOException,                    "System.IO", "System.IO.IOException",                    Exception)
+EXCEPTION_TYPEINFO(FileNotFoundException,          "System.IO", "System.IO.FileNotFoundException",          IOException)
+EXCEPTION_TYPEINFO(DirectoryNotFoundException,     "System.IO", "System.IO.DirectoryNotFoundException",     IOException)
+
+#undef EXCEPTION_TYPEINFO
+
+[[noreturn]] void throw_io_exception(const char* message) {
+    Exception* ex = create_exception(&IOException_TypeInfo, message ? message : "I/O error occurred.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_file_not_found(const char* path) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "Could not find file '%s'.", path ? path : "");
+    Exception* ex = create_exception(&FileNotFoundException_TypeInfo, buf);
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_directory_not_found(const char* path) {
+    char buf[512];
+    snprintf(buf, sizeof(buf), "Could not find a part of the path '%s'.", path ? path : "");
+    Exception* ex = create_exception(&DirectoryNotFoundException_TypeInfo, buf);
+    throw_exception(ex);
+}
 
 } // namespace cil2cpp

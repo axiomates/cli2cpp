@@ -555,18 +555,35 @@ public partial class CppCodeGenerator
         // System.Threading.Thread — maps to cil2cpp::ManagedThread (opaque runtime type)
         yield return ("System_Threading_Thread", "cil2cpp::ManagedThread");
 
+        // CancellationToken/Source — runtime-provided types
+        yield return ("System_Threading_CancellationTokenSource", "cil2cpp::CancellationTokenSource");
+        yield return ("System_Threading_CancellationToken", "cil2cpp::CancellationToken");
+
         // Exception hierarchy — all map to runtime C++ exception types
         yield return ("System_Exception", "cil2cpp::Exception");
         yield return ("System_NullReferenceException", "cil2cpp::NullReferenceException");
         yield return ("System_IndexOutOfRangeException", "cil2cpp::IndexOutOfRangeException");
         yield return ("System_InvalidCastException", "cil2cpp::InvalidCastException");
         yield return ("System_InvalidOperationException", "cil2cpp::InvalidOperationException");
+        yield return ("System_ObjectDisposedException", "cil2cpp::ObjectDisposedException");
+        yield return ("System_NotSupportedException", "cil2cpp::NotSupportedException");
+        yield return ("System_PlatformNotSupportedException", "cil2cpp::PlatformNotSupportedException");
+        yield return ("System_NotImplementedException", "cil2cpp::NotImplementedException");
         yield return ("System_ArgumentException", "cil2cpp::ArgumentException");
         yield return ("System_ArgumentNullException", "cil2cpp::ArgumentNullException");
+        yield return ("System_ArgumentOutOfRangeException", "cil2cpp::ArgumentOutOfRangeException");
+        yield return ("System_ArithmeticException", "cil2cpp::ArithmeticException");
         yield return ("System_OverflowException", "cil2cpp::OverflowException");
-        yield return ("System_ArithmeticException", "cil2cpp::OverflowException");
-        yield return ("System_NotSupportedException", "cil2cpp::InvalidOperationException");
-        yield return ("System_NotImplementedException", "cil2cpp::InvalidOperationException");
+        yield return ("System_DivideByZeroException", "cil2cpp::DivideByZeroException");
+        yield return ("System_FormatException", "cil2cpp::FormatException");
+        yield return ("System_RankException", "cil2cpp::RankException");
+        yield return ("System_ArrayTypeMismatchException", "cil2cpp::ArrayTypeMismatchException");
+        yield return ("System_TypeInitializationException", "cil2cpp::TypeInitializationException");
+        yield return ("System_TimeoutException", "cil2cpp::TimeoutException");
+        yield return ("System_AggregateException", "cil2cpp::AggregateException");
+        yield return ("System_OperationCanceledException", "cil2cpp::OperationCanceledException");
+        yield return ("System_Threading_Tasks_TaskCanceledException", "cil2cpp::TaskCanceledException");
+        yield return ("System_Collections_Generic_KeyNotFoundException", "cil2cpp::KeyNotFoundException");
     }
 
     /// <summary>
@@ -581,9 +598,25 @@ public partial class CppCodeGenerator
         yield return ("System_IndexOutOfRangeException", "cil2cpp::IndexOutOfRangeException_TypeInfo");
         yield return ("System_InvalidCastException", "cil2cpp::InvalidCastException_TypeInfo");
         yield return ("System_InvalidOperationException", "cil2cpp::InvalidOperationException_TypeInfo");
+        yield return ("System_ObjectDisposedException", "cil2cpp::ObjectDisposedException_TypeInfo");
+        yield return ("System_NotSupportedException", "cil2cpp::NotSupportedException_TypeInfo");
+        yield return ("System_PlatformNotSupportedException", "cil2cpp::PlatformNotSupportedException_TypeInfo");
+        yield return ("System_NotImplementedException", "cil2cpp::NotImplementedException_TypeInfo");
         yield return ("System_ArgumentException", "cil2cpp::ArgumentException_TypeInfo");
         yield return ("System_ArgumentNullException", "cil2cpp::ArgumentNullException_TypeInfo");
+        yield return ("System_ArgumentOutOfRangeException", "cil2cpp::ArgumentOutOfRangeException_TypeInfo");
+        yield return ("System_ArithmeticException", "cil2cpp::ArithmeticException_TypeInfo");
         yield return ("System_OverflowException", "cil2cpp::OverflowException_TypeInfo");
+        yield return ("System_DivideByZeroException", "cil2cpp::DivideByZeroException_TypeInfo");
+        yield return ("System_FormatException", "cil2cpp::FormatException_TypeInfo");
+        yield return ("System_RankException", "cil2cpp::RankException_TypeInfo");
+        yield return ("System_ArrayTypeMismatchException", "cil2cpp::ArrayTypeMismatchException_TypeInfo");
+        yield return ("System_TypeInitializationException", "cil2cpp::TypeInitializationException_TypeInfo");
+        yield return ("System_TimeoutException", "cil2cpp::TimeoutException_TypeInfo");
+        yield return ("System_AggregateException", "cil2cpp::AggregateException_TypeInfo");
+        yield return ("System_OperationCanceledException", "cil2cpp::OperationCanceledException_TypeInfo");
+        yield return ("System_Threading_Tasks_TaskCanceledException", "cil2cpp::TaskCanceledException_TypeInfo");
+        yield return ("System_Collections_Generic_KeyNotFoundException", "cil2cpp::KeyNotFoundException_TypeInfo");
     }
 
     /// <summary>

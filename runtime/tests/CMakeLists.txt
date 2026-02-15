@@ -34,6 +34,7 @@ add_executable(cil2cpp_tests
     test_console.cpp
     test_threading.cpp
     test_reflection.cpp
+    test_memberinfo.cpp
     test_collections.cpp
     test_async.cpp
 )

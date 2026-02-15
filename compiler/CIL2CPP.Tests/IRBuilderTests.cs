@@ -3493,7 +3493,8 @@ public class IRBuilderTests
             .OfType<IRRawCpp>()
             .Select(r => r.Code)
             .ToList();
-        Assert.Contains(rawCpps, c => c.Contains("type_get_name"));
+        // MemberInfo.get_Name on a Type dispatches through memberinfo_get_name
+        Assert.Contains(rawCpps, c => c.Contains("memberinfo_get_name") || c.Contains("type_get_name"));
     }
 
     [Fact]
@@ -3972,5 +3973,252 @@ public class IRBuilderTests
         Assert.NotNull(covariantStr);
         Assert.Single(covariantStr.GenericArguments);
         Assert.Equal("System.String", covariantStr.GenericArguments[0]);
+    }
+
+    // ===== CancellationToken / TaskCompletionSource =====
+
+    [Fact]
+    public void Build_FeatureTest_CancellationTokenSource_SyntheticType()
+    {
+        var module = BuildFeatureTest();
+        var ctsType = module.Types.FirstOrDefault(t =>
+            t.ILFullName == "System.Threading.CancellationTokenSource");
+        Assert.NotNull(ctsType);
+        Assert.False(ctsType!.IsValueType);
+        Assert.True(ctsType.IsRuntimeProvided);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_CancellationToken_SyntheticType()
+    {
+        var module = BuildFeatureTest();
+        var ctType = module.Types.FirstOrDefault(t =>
+            t.ILFullName == "System.Threading.CancellationToken");
+        Assert.NotNull(ctType);
+        Assert.True(ctType!.IsValueType);
+        Assert.Contains(ctType.Fields, f => f.CppName == "f__source");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_CancellationTokenSource_InterceptedCalls()
+    {
+        var module = BuildFeatureTest();
+        var programType = module.Types.First(t => t.Name == "Program");
+        var method = programType.Methods.FirstOrDefault(m => m.Name == "TestCancellationTokenSourceCreate");
+        Assert.NotNull(method);
+        var rawCpp = method!.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        // Should have cts_create, cts_cancel, etc.
+        Assert.True(rawCpp.Any(r => r.Code.Contains("cts_create")),
+            "Should intercept CTS constructor with cts_create");
+        Assert.True(rawCpp.Any(r => r.Code.Contains("cts_cancel")),
+            "Should intercept CTS.Cancel with cts_cancel");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_CancellationToken_InterceptedCalls()
+    {
+        var module = BuildFeatureTest();
+        var programType = module.Types.First(t => t.Name == "Program");
+        var method = programType.Methods.FirstOrDefault(m => m.Name == "TestCancellationTokenDefault");
+        Assert.NotNull(method);
+        var rawCpp = method!.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        // Should have ct_get_none or ct_is_cancellation_requested
+        Assert.True(rawCpp.Any(r => r.Code.Contains("ct_")),
+            "Should intercept CancellationToken calls with ct_ runtime functions");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TaskCompletionSource_Monomorphized()
+    {
+        var module = BuildFeatureTest();
+        var tcsInt = module.Types.FirstOrDefault(t =>
+            t.IsGenericInstance
+            && t.ILFullName.Contains("TaskCompletionSource`1")
+            && t.ILFullName.Contains("System.Int32"));
+        Assert.NotNull(tcsInt);
+        Assert.False(tcsInt!.IsValueType);
+        Assert.Contains(tcsInt.Fields, f => f.CppName == "f_task");
+    }
+
+    // ── LINQ Interception Tests ───────────────────────────────
+
+    [Fact]
+    public void Build_FeatureTest_LinqCount_Intercepted()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "LinqCount");
+        var rawCpp = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("array_length")),
+            "LinqCount should use array_length");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_LinqCountPredicate_Intercepted()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "LinqCountPredicate");
+        var rawCpp = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("method_ptr")),
+            "LinqCountPredicate should call delegate via method_ptr");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_LinqSum_Intercepted()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "LinqSum");
+        var rawCpp = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("array_data")),
+            "LinqSum should use array_data for iteration");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_LinqContains_Intercepted()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "LinqContains");
+        var rawCpp = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("__linq_f")),
+            "LinqContains should use __linq_f found variable");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_GenericDelegate_IsDelegate()
+    {
+        var module = BuildFeatureTest();
+        var funcType = module.Types.FirstOrDefault(t =>
+            t.ILFullName.Contains("System.Func`2") && t.ILFullName.Contains("Boolean"));
+        Assert.NotNull(funcType);
+        Assert.True(funcType!.IsDelegate,
+            "Generic Func<int,bool> should have IsDelegate = true");
+    }
+
+    // ── String Operations Tests ───────────────────────────────
+
+    [Fact]
+    public void Build_FeatureTest_StringFormat_Intercepted()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "StringFormat");
+        var rawCpp = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("string_format")),
+            "StringFormat should call string_format");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_StringIndexOf_Mapped()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "StringIndexOf");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("string_index_of")),
+            "StringIndexOf should map to string_index_of");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_StringToUpper_Mapped()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "StringToUpper");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("string_to_upper")),
+            "StringToUpper should map to string_to_upper");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_StringReplace_Mapped()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "StringReplace");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("string_replace")),
+            "StringReplace should map to string_replace");
+    }
+
+    // ===== System.IO tests =====
+
+    [Fact]
+    [Trait("Category", "FeatureTest")]
+    public void Build_FeatureTest_FileWriteAndRead_HasFileWriteCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "FileWriteAndRead");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("File_WriteAllText")),
+            "FileWriteAndRead should map to File_WriteAllText");
+        Assert.True(calls.Any(c => c.FunctionName.Contains("File_ReadAllText")),
+            "FileWriteAndRead should map to File_ReadAllText");
+    }
+
+    [Fact]
+    [Trait("Category", "FeatureTest")]
+    public void Build_FeatureTest_FileExists_HasExistsCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "FileExists");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("File_Exists")),
+            "FileExists should map to File_Exists");
+    }
+
+    [Fact]
+    [Trait("Category", "FeatureTest")]
+    public void Build_FeatureTest_PathCombine_HasCombineCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "PathCombine");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("Path_Combine")),
+            "PathCombine should map to Path_Combine");
+    }
+
+    [Fact]
+    [Trait("Category", "FeatureTest")]
+    public void Build_FeatureTest_PathGetFileName_HasGetFileNameCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "PathGetFileName");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("Path_GetFileName")),
+            "PathGetFileName should map to Path_GetFileName");
+    }
+
+    [Fact]
+    [Trait("Category", "FeatureTest")]
+    public void Build_FeatureTest_PathGetExtension_HasGetExtensionCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "PathGetExtension");
+        var calls = method.BasicBlocks.SelectMany(b => b.Instructions)
+            .OfType<IRCall>().ToList();
+        Assert.True(calls.Any(c => c.FunctionName.Contains("Path_GetExtension")),
+            "PathGetExtension should map to Path_GetExtension");
     }
 }

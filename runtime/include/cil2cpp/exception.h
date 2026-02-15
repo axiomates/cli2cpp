@@ -20,40 +20,39 @@ struct Exception : Object {
     String* stack_trace;
 };
 
-/**
- * Null reference exception.
- */
+// --- SystemException hierarchy ---
 struct NullReferenceException : Exception {};
-
-/**
- * Index out of range exception.
- */
 struct IndexOutOfRangeException : Exception {};
-
-/**
- * Invalid cast exception.
- */
 struct InvalidCastException : Exception {};
-
-/**
- * Invalid operation exception.
- */
 struct InvalidOperationException : Exception {};
-
-/**
- * Argument exception.
- */
+struct ObjectDisposedException : InvalidOperationException {};
+struct NotSupportedException : Exception {};
+struct PlatformNotSupportedException : NotSupportedException {};
+struct NotImplementedException : Exception {};
 struct ArgumentException : Exception {};
-
-/**
- * Argument null exception.
- */
 struct ArgumentNullException : ArgumentException {};
+struct ArgumentOutOfRangeException : ArgumentException {};
+struct ArithmeticException : Exception {};
+struct OverflowException : ArithmeticException {};
+struct DivideByZeroException : ArithmeticException {};
+struct FormatException : Exception {};
+struct RankException : Exception {};
+struct ArrayTypeMismatchException : Exception {};
+struct TypeInitializationException : Exception {};
+struct TimeoutException : Exception {};
 
-/**
- * Overflow exception (thrown by checked arithmetic).
- */
-struct OverflowException : Exception {};
+// --- Task-related exceptions ---
+struct AggregateException : Exception {};
+struct OperationCanceledException : Exception {};
+struct TaskCanceledException : OperationCanceledException {};
+
+// --- IO ---
+struct IOException : Exception {};
+struct FileNotFoundException : IOException {};
+struct DirectoryNotFoundException : IOException {};
+
+// --- Collections ---
+struct KeyNotFoundException : Exception {};
 
 /**
  * Exception handling context.
@@ -105,10 +104,23 @@ extern thread_local ExceptionContext* g_exception_context;
  */
 [[noreturn]] void throw_argument_null();
 
-/**
- * Create and throw an ArgumentException.
- */
 [[noreturn]] void throw_argument();
+[[noreturn]] void throw_argument_out_of_range();
+[[noreturn]] void throw_not_supported();
+[[noreturn]] void throw_not_implemented();
+[[noreturn]] void throw_format();
+[[noreturn]] void throw_divide_by_zero();
+[[noreturn]] void throw_object_disposed();
+[[noreturn]] void throw_key_not_found();
+[[noreturn]] void throw_timeout();
+[[noreturn]] void throw_rank();
+[[noreturn]] void throw_array_type_mismatch();
+[[noreturn]] void throw_type_initialization(const char* type_name);
+[[noreturn]] void throw_operation_canceled();
+[[noreturn]] void throw_platform_not_supported();
+[[noreturn]] void throw_io_exception(const char* message);
+[[noreturn]] void throw_file_not_found(const char* path);
+[[noreturn]] void throw_directory_not_found(const char* path);
 
 /**
  * Get current exception (in catch block).
@@ -135,9 +147,28 @@ extern TypeInfo NullReferenceException_TypeInfo;
 extern TypeInfo IndexOutOfRangeException_TypeInfo;
 extern TypeInfo InvalidCastException_TypeInfo;
 extern TypeInfo InvalidOperationException_TypeInfo;
+extern TypeInfo ObjectDisposedException_TypeInfo;
+extern TypeInfo NotSupportedException_TypeInfo;
+extern TypeInfo PlatformNotSupportedException_TypeInfo;
+extern TypeInfo NotImplementedException_TypeInfo;
 extern TypeInfo ArgumentException_TypeInfo;
 extern TypeInfo ArgumentNullException_TypeInfo;
+extern TypeInfo ArgumentOutOfRangeException_TypeInfo;
+extern TypeInfo ArithmeticException_TypeInfo;
 extern TypeInfo OverflowException_TypeInfo;
+extern TypeInfo DivideByZeroException_TypeInfo;
+extern TypeInfo FormatException_TypeInfo;
+extern TypeInfo RankException_TypeInfo;
+extern TypeInfo ArrayTypeMismatchException_TypeInfo;
+extern TypeInfo TypeInitializationException_TypeInfo;
+extern TypeInfo TimeoutException_TypeInfo;
+extern TypeInfo AggregateException_TypeInfo;
+extern TypeInfo OperationCanceledException_TypeInfo;
+extern TypeInfo TaskCanceledException_TypeInfo;
+extern TypeInfo KeyNotFoundException_TypeInfo;
+extern TypeInfo IOException_TypeInfo;
+extern TypeInfo FileNotFoundException_TypeInfo;
+extern TypeInfo DirectoryNotFoundException_TypeInfo;
 
 } // namespace cil2cpp
 

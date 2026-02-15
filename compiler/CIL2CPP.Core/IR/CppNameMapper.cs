@@ -17,17 +17,38 @@ public static class CppNameMapper
     /// </summary>
     private static readonly Dictionary<string, string> RuntimeExceptionTypeMap = new()
     {
+        // Base
         ["System.Exception"] = "cil2cpp::Exception",
+        // SystemException hierarchy
         ["System.NullReferenceException"] = "cil2cpp::NullReferenceException",
         ["System.IndexOutOfRangeException"] = "cil2cpp::IndexOutOfRangeException",
         ["System.InvalidCastException"] = "cil2cpp::InvalidCastException",
         ["System.InvalidOperationException"] = "cil2cpp::InvalidOperationException",
+        ["System.ObjectDisposedException"] = "cil2cpp::ObjectDisposedException",
+        ["System.NotSupportedException"] = "cil2cpp::NotSupportedException",
+        ["System.PlatformNotSupportedException"] = "cil2cpp::PlatformNotSupportedException",
+        ["System.NotImplementedException"] = "cil2cpp::NotImplementedException",
         ["System.ArgumentException"] = "cil2cpp::ArgumentException",
         ["System.ArgumentNullException"] = "cil2cpp::ArgumentNullException",
+        ["System.ArgumentOutOfRangeException"] = "cil2cpp::ArgumentOutOfRangeException",
+        ["System.ArithmeticException"] = "cil2cpp::ArithmeticException",
         ["System.OverflowException"] = "cil2cpp::OverflowException",
-        ["System.ArithmeticException"] = "cil2cpp::OverflowException",
-        ["System.NotSupportedException"] = "cil2cpp::InvalidOperationException",
-        ["System.NotImplementedException"] = "cil2cpp::InvalidOperationException",
+        ["System.DivideByZeroException"] = "cil2cpp::DivideByZeroException",
+        ["System.FormatException"] = "cil2cpp::FormatException",
+        ["System.RankException"] = "cil2cpp::RankException",
+        ["System.ArrayTypeMismatchException"] = "cil2cpp::ArrayTypeMismatchException",
+        ["System.TypeInitializationException"] = "cil2cpp::TypeInitializationException",
+        ["System.TimeoutException"] = "cil2cpp::TimeoutException",
+        // Task-related
+        ["System.AggregateException"] = "cil2cpp::AggregateException",
+        ["System.OperationCanceledException"] = "cil2cpp::OperationCanceledException",
+        ["System.Threading.Tasks.TaskCanceledException"] = "cil2cpp::TaskCanceledException",
+        // Collections
+        ["System.Collections.Generic.KeyNotFoundException"] = "cil2cpp::KeyNotFoundException",
+        // IO
+        ["System.IO.IOException"] = "cil2cpp::IOException",
+        ["System.IO.FileNotFoundException"] = "cil2cpp::FileNotFoundException",
+        ["System.IO.DirectoryNotFoundException"] = "cil2cpp::DirectoryNotFoundException",
     };
 
     /// <summary>

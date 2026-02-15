@@ -263,9 +263,9 @@ public partial class CppCodeGenerator
                 continue;
             }
 
-            // BCL types: emit stub method bodies instead of compiled IL
-            // (BCL method calls are routed through icalls; bodies reference deep internal types)
-            if (type.SourceKind == AssemblyKind.BCL)
+            // BCL types: emit stub method bodies unless they compile from IL
+            // Nullable/Index/Range compile from IL in MA mode; other BCL types are stubbed
+            if (type.SourceKind == AssemblyKind.BCL && !IsCompileFromILType(type))
             {
                 foreach (var method in type.Methods)
                 {
@@ -380,6 +380,17 @@ public partial class CppCodeGenerator
         sb.AppendLine($"    .generic_argument_count = {genCount},");
         sb.AppendLine($"    .generic_definition_name = {genDefName},");
         sb.AppendLine("};");
+    }
+
+    /// <summary>
+    /// Check if a BCL type should compile from IL instead of being stubbed.
+    /// These are simple value types whose IL bodies have no deep BCL dependencies.
+    /// </summary>
+    private static bool IsCompileFromILType(IRType type)
+    {
+        return type.ILFullName == "System.Index"
+            || type.ILFullName == "System.Range"
+            || type.ILFullName.StartsWith("System.Nullable`");
     }
 
     /// <summary>

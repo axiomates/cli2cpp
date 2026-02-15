@@ -94,26 +94,25 @@ public partial class IRBuilder
         }
 
         // ===== BCL Type Interceptions =====
-        // These intercept BCL method calls and emit inline C++ instead of normal method calls.
-        // In single-assembly mode, ALL interceptions are active (BCL IL is not available).
-        // In multi-assembly mode, interceptions are still active because BCL methods are currently
-        // compiled as stubs. When BCL IL compilation is fully implemented, interceptions for simple
-        // value types (Nullable, ValueTuple, Index, Range) can be bypassed.
-        //
-        // Future bypass candidates (when BCL IL compiles correctly):
-        //   Nullable, ValueTuple, Index, Range
-        // Must always intercept (runtime-tied / no IL):
-        //   Async, Thread, Type, Span, MdArray, EqualityComparer, List, Dictionary
+        // In SA mode: ALL interceptions are active (BCL IL is not available).
+        // In MA mode: Nullable/Index/Range compile from BCL IL — interceptions bypassed.
+        // Always intercept: ValueTuple, Async, Thread, Type, Span, MdArray, EqualityComparer, List, Dictionary
 
-        if (TryEmitNullableCall(block, stack, methodRef, ref tempCounter))
-            return;
+        // SA-only: simple BCL value types that compile from IL in MA mode
+        if (_assemblySet == null)
+        {
+            if (TryEmitNullableCall(block, stack, methodRef, ref tempCounter))
+                return;
+            if (TryEmitIndexCall(block, stack, methodRef, ref tempCounter))
+                return;
+            if (TryEmitRangeCall(block, stack, methodRef, ref tempCounter))
+                return;
+        }
+
+        // Always-active interceptions
         if (TryEmitValueTupleCall(block, stack, methodRef, ref tempCounter))
             return;
         if (TryEmitAsyncCall(block, stack, methodRef, ref tempCounter))
-            return;
-        if (TryEmitIndexCall(block, stack, methodRef, ref tempCounter))
-            return;
-        if (TryEmitRangeCall(block, stack, methodRef, ref tempCounter))
             return;
         if (TryEmitGetSubArray(block, stack, methodRef, ref tempCounter))
             return;
@@ -130,6 +129,20 @@ public partial class IRBuilder
         if (TryEmitListCall(block, stack, methodRef, ref tempCounter))
             return;
         if (TryEmitDictionaryCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitCancellationTokenSourceCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitCancellationTokenCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitTaskCompletionSourceCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitLinqCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitStringFormatCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitAsyncEnumerableCall(block, stack, methodRef, ref tempCounter))
+            return;
+        if (TryEmitExceptionDispatchInfoCall(block, stack, methodRef, ref tempCounter))
             return;
 
         // Special: Delegate.Invoke — emit IRDelegateInvoke instead of normal call
@@ -422,24 +435,21 @@ public partial class IRBuilder
         if (TryEmitExceptionNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
-        // Special: Nullable<T> constructor (newobj pattern — rare, usually ldloca+call)
-        if (TryEmitNullableNewObj(block, stack, ctorRef, ref tempCounter))
-            return;
+        // SA-only: Nullable/Index/Range newobj — in MA mode, compile from BCL IL
+        if (_assemblySet == null)
+        {
+            if (TryEmitNullableNewObj(block, stack, ctorRef, ref tempCounter))
+                return;
+            if (TryEmitIndexNewObj(block, stack, ctorRef, ref tempCounter))
+                return;
+            if (TryEmitRangeNewObj(block, stack, ctorRef, ref tempCounter))
+                return;
+        }
 
-        // Special: ValueTuple constructor (newobj pattern — value type, can't use gc::alloc)
+        // Always-active newobj interceptions
         if (TryEmitValueTupleNewObj(block, stack, ctorRef, ref tempCounter))
             return;
-
-        // Special: Async BCL types (rare — builder uses Create() factory, not newobj)
         if (TryEmitAsyncNewObj(block, stack, ctorRef, ref tempCounter))
-            return;
-
-        // Special: System.Index constructor
-        if (TryEmitIndexNewObj(block, stack, ctorRef, ref tempCounter))
-            return;
-
-        // Special: System.Range constructor
-        if (TryEmitRangeNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
         // Special: System.Threading.Thread constructor
@@ -464,6 +474,17 @@ public partial class IRBuilder
 
         // Special: Dictionary<K,V> constructor
         if (TryEmitDictionaryNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: CancellationTokenSource constructor
+        if (TryEmitCancellationTokenSourceNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: TaskCompletionSource<T> constructor
+        if (TryEmitAsyncEnumerableNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        if (TryEmitTaskCompletionSourceNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
         var cacheKey = ResolveCacheKey(ctorRef.DeclaringType);

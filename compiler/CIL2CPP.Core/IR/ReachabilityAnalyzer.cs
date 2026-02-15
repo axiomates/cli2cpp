@@ -19,7 +19,7 @@ public class ReachabilityResult
 /// <summary>
 /// Performs reachability analysis (tree shaking) starting from entry point(s).
 /// Uses method-level granularity: only methods that are actually called are marked reachable.
-/// For user assembly types, all methods are conservatively marked reachable.
+/// All types (user and BCL) use the same worklist-driven analysis — no blanket seeding.
 /// BCL types in deep internal namespaces are filtered at the boundary.
 /// </summary>
 public class ReachabilityAnalyzer
@@ -139,21 +139,9 @@ public class ReachabilityAnalyzer
                 MarkTypeReachable(fieldTypeDef);
         }
 
-        // User assembly types: conservatively mark all methods and nested types
-        // (user types are few, and missing a method would cause linker errors)
-        if (IsUserAssembly(type))
-        {
-            foreach (var method in type.Methods)
-                SeedMethod(method);
-
-            foreach (var nested in type.NestedTypes)
-                MarkTypeReachable(nested);
-        }
-        else
-        {
-            // BCL/third-party: check for virtual method overrides that match dispatched slots
-            MarkDispatchedOverrides(type);
-        }
+        // All types: check for virtual method overrides that match dispatched slots
+        // (user types are no longer blanket-seeded — worklist discovers reachable methods)
+        MarkDispatchedOverrides(type);
     }
 
     /// <summary>
@@ -168,13 +156,12 @@ public class ReachabilityAnalyzer
         // Check all already-reachable types for overrides of this slot
         foreach (var type in _result.ReachableTypes.ToArray())
         {
-            if (IsUserAssembly(type)) continue; // already fully seeded
             MarkOverrideIfExists(type, method.Name, method.Parameters.Count);
         }
     }
 
     /// <summary>
-    /// When a non-user type becomes reachable, check if it overrides any dispatched virtual slot.
+    /// When a type becomes reachable, check if it overrides any dispatched virtual slot.
     /// </summary>
     private void MarkDispatchedOverrides(TypeDefinition type)
     {
@@ -217,6 +204,7 @@ public class ReachabilityAnalyzer
         "System.Runtime.CompilerServices",
         "System.Text",
         "System.Linq",
+        "System.Reflection",
     ];
 
     /// <summary>

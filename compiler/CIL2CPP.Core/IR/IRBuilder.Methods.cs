@@ -237,8 +237,9 @@ public partial class IRBuilder
                             // Use GetCppTypeName (not MangleTypeName) so that runtime exception types
                             // resolve to cil2cpp::Exception etc. — the CIL2CPP_CATCH macro appends
                             // _TypeInfo which must match the runtime-declared TypeInfo names.
-                            var catchTypeCpp = evt.CatchTypeName != null
-                                ? CppNameMapper.GetCppTypeName(evt.CatchTypeName) : null;
+                            // System.Object catch is equivalent to catch-all
+                            var catchTypeCpp = evt.CatchTypeName is not null and not "System.Object"
+                                ? CppNameMapper.GetCppTypeName(evt.CatchTypeName)?.TrimEnd('*').TrimEnd() : null;
                             block.Instructions.Add(new IRCatchBegin { ExceptionTypeCppName = catchTypeCpp });
                             // IL pushes exception onto stack at catch entry
                             stack.Push("__exc_ctx.current_exception");

@@ -56,17 +56,22 @@ set(RUNTIME_SOURCES
     src/exception/exception.cpp
     src/bcl/System.Object.cpp
     src/bcl/System.String.cpp
+    src/bcl/System.String.Extra.cpp
     src/bcl/System.Console.cpp
+    src/bcl/System.IO.cpp
     src/bcl/System.Array.cpp
     src/bcl/System.MdArray.cpp
     src/bcl/System.Delegate.cpp
     src/icall/icall.cpp
     src/async/task.cpp
     src/async/threadpool.cpp
+    src/async/cancellation.cpp
+    src/async/async_enumerable.cpp
     src/threading/monitor.cpp
     src/threading/interlocked.cpp
     src/threading/thread.cpp
     src/reflection/type.cpp
+    src/reflection/memberinfo.cpp
     src/collections/list.cpp
     src/collections/dictionary.cpp
 )

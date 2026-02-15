@@ -174,6 +174,10 @@ Boolean string_equals(String* a, String* b) {
     return std::memcmp(a->chars, b->chars, a->length * sizeof(Char)) == 0;
 }
 
+Boolean string_not_equals(String* a, String* b) {
+    return !string_equals(a, b);
+}
+
 // FNV-1a hash constants (http://www.isthe.com/chongo/tech/comp/fnv/)
 static constexpr UInt32 FNV1A_OFFSET_BASIS = 2166136261u;
 static constexpr UInt32 FNV1A_PRIME        = 16777619u;
@@ -191,6 +195,16 @@ Int32 string_get_hash_code(String* str) {
 
 Boolean string_is_null_or_empty(String* str) {
     return !str || str->length == 0;
+}
+
+Boolean string_is_null_or_whitespace(String* str) {
+    if (!str || str->length == 0) return true;
+    for (Int32 i = 0; i < str->length; i++) {
+        Char c = str->chars[i];
+        if (c != u' ' && c != u'\t' && c != u'\n' && c != u'\r' &&
+            c != u'\v' && c != u'\f') return false;
+    }
+    return true;
 }
 
 String* string_substring(String* str, Int32 start, Int32 length) {

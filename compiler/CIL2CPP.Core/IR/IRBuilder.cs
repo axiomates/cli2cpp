@@ -38,9 +38,18 @@ public partial class IRBuilder
         "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
         "System.Runtime.CompilerServices.IAsyncStateMachine",
         "System.Threading.Thread",
+        "System.Threading.CancellationTokenSource",
         "System.Type",
         "System.Span`1",
         "System.ReadOnlySpan`1",
+        "System.Threading.Tasks.ValueTask",
+        "System.Runtime.CompilerServices.ValueTaskAwaiter",
+        "System.Runtime.CompilerServices.AsyncIteratorMethodBuilder",
+        "System.Reflection.MethodInfo",
+        "System.Reflection.MethodBase",
+        "System.Reflection.FieldInfo",
+        "System.Reflection.ParameterInfo",
+        "System.Reflection.MemberInfo",
     };
 
     private readonly AssemblyReader _reader;
@@ -168,6 +177,12 @@ public partial class IRBuilder
 
         // Pass 1.5b: Create synthetic type for System.Threading.Thread (reference type)
         CreateThreadSyntheticType();
+
+        // Pass 1.5b2: Create synthetic types for CancellationTokenSource/CancellationToken
+        CreateCancellationSyntheticTypes();
+
+        // Pass 1.5b3: Create synthetic types for async enumerable (ValueTask, AsyncIteratorMethodBuilder)
+        CreateAsyncEnumerableSyntheticTypes();
 
         // Pass 1.5c: Create proxy types for well-known BCL interfaces (IDisposable, IEnumerable, etc.)
         // In multi-assembly mode, real BCL interfaces are loaded from assemblies — no proxies needed.
