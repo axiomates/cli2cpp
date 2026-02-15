@@ -23,14 +23,14 @@ cil2cpp/
 │   │   ├── IL/                 #     IL 解析 (Mono.Cecil)
 │   │   ├── IR/                 #     中间表示 + 类型映射
 │   │   └── CodeGen/            #     C++ 代码生成
-│   ├── CIL2CPP.Tests/          #   编译器单元测试 (xUnit, 1140 tests)
+│   ├── CIL2CPP.Tests/          #   编译器单元测试 (xUnit, 1153 tests)
 │   └── samples/                #   示例 C# 程序
 ├── runtime/                    # C++ 运行时库 (CMake 项目)
 │   ├── CMakeLists.txt
 │   ├── cmake/                  #   CMake 包配置模板
 │   ├── include/cil2cpp/        #   头文件
 │   ├── src/                    #   GC、类型系统、异常、BCL
-│   └── tests/                  #   运行时单元测试 (Google Test, 426 tests)
+│   └── tests/                  #   运行时单元测试 (Google Test, 425 tests)
 └── tools/
     └── dev.py                  # 开发者 CLI (build/test/coverage/codegen/integration)
 ```
@@ -460,17 +460,16 @@ void Program_Main() {
 
 ### 标准库 (BCL)
 
-> 多程序集模式：BCL 类型通过 `--multi-assembly` 自动翻译（树摇 + ICall 注册表）。
-> 单程序集模式：`MapBclMethod()` 硬编码映射 + BCL 拦截（集合类/LINQ/Span 等）。
+> BCL 方法调用通过 ICallRegistry（85+ 映射）和 TryEmit* 拦截（28 个拦截器）统一路由到 C++ 运行时。
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | 手写映射 + 运行时实现；`GetType()` 返回缓存的 `Type` 对象 |
-| System.String (Concat, IsNullOrEmpty, Length) | ✅ | 手写映射 + 运行时实现 |
-| Console.WriteLine (全部重载) | ✅ | 手写映射，String, Int32, Int64, Single, Double, Boolean, Object |
-| Console.Write / ReadLine | ✅ | 手写映射 |
+| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | ICallRegistry + 运行时实现；`GetType()` 返回缓存的 `Type` 对象 |
+| System.String (Concat, IsNullOrEmpty, Length) | ✅ | ICallRegistry + 运行时实现 |
+| Console.WriteLine (全部重载) | ✅ | ICallRegistry 映射，支持 String/Int32/Int64/Single/Double/Boolean/Object |
+| Console.Write / ReadLine | ✅ | ICallRegistry 映射 |
 | System.Math | ✅ | Abs, Max, Min, Sqrt, Floor, Ceil, Round, Pow, Sin, Cos, Tan, Asin, Acos, Atan, Atan2, Log, Log10, Exp → `<cmath>` |
-| 多程序集 BCL 自动翻译 | ⚠️ | `--multi-assembly` 模式：自动加载 BCL 程序集 + 树摇 + IL 翻译；需要更多 icall 覆盖 |
+| 多程序集模式 | ⚠️ | `--multi-assembly`：加载 BCL 程序集 + 可达性分析树摇 + 类型布局生成；BCL 方法体当前为 stub，计划逐步编译 IL |
 | List\<T\> / Dictionary\<K,V\> | ✅ | C++ 运行时实现：`list_create`/`list_add`/`list_get`/`list_set` + `dict_create`/`dict_add`/`dict_get`；BCL 拦截，含 Enumerator |
 | LINQ (Where/Select/ToList/Count/Any/First) | ✅ | 核心 LINQ 操作通过 BCL 拦截映射到 C++ 运行时函数；OrderBy/GroupBy/Join 未实现 |
 | yield return / IEnumerable | ✅ | C# 编译器生成迭代器状态机类，BCL 接口代理（IEnumerable\<T\>/IEnumerator\<T\>）启用接口分派 |
@@ -565,19 +564,30 @@ void Program_Main() {
 
 ## BCL 策略
 
-CIL2CPP 使用两种互补的 BCL 支持策略：
+CIL2CPP 使用统一的 BCL 方法解析流水线（两种程序集模式共享）：
 
 ```
-单程序集模式:                             多程序集模式 (--multi-assembly):
-  C# 用户代码                            C# 用户代码 + 第三方库 + BCL
-      ↓ IL → C++                             ↓ IL → C++ (同一流水线)
-  MapBclMethod() 硬编码映射               可达性分析 (树摇)
-  + BCL 拦截 (集合/LINQ/Span 等)              ↓ 仅翻译可达类型
-      ↓                                  icall 层 (C++ 薄封装)
-  C++ 运行时实现                              ↓
-      ↓                                  printf / <cmath> / OS API / ...
-  printf / <cmath> / ...
+C# 用户代码中的 BCL 调用
+    ↓
+TryEmit* 拦截（28 个拦截器）
+  Nullable<T>, ValueTuple, Task<T>, Span<T>,
+  List<T>, Dictionary<K,V>, Thread, Type, ...
+    ↓ 未拦截的调用
+ICallRegistry 查找（85+ 注册映射）
+  Object, String, Console, Math, Array,
+  Delegate, Monitor, Interlocked, GC, ...
+    ↓
+C++ 运行时实现
+    ↓
+printf / <cmath> / BoehmGC / OS API / ...
 ```
+
+> **与 Unity IL2CPP 的架构差异**：Unity IL2CPP 编译所有 BCL IL 方法体为 C++，仅在最底层使用 icall（GC、线程、OS API）。
+> CIL2CPP 当前跳过 BCL 方法体，通过 ICallRegistry + TryEmit* 映射直接路由到 C++ 运行时实现。
+
+两种程序集加载模式：
+- **单程序集模式**（默认）：仅编译用户代码，BCL 接口通过合成代理提供
+- **多程序集模式**（`--multi-assembly`）：加载用户 + 第三方 + BCL 程序集，可达性分析树摇
 
 **icall（内部调用）** 是 .NET 中标记为 `[MethodImpl(MethodImplOptions.InternalCall)]` 的方法——BCL 的 C# 代码调用到原生实现的边界。例如 `Math.Sin()` 的 C# 代码最终调用一个 icall，该 icall 的 C++ 实现调用 `<cmath>` 的 `sin()`。
 
@@ -755,8 +765,8 @@ python tools/dev.py build                  # 编译 compiler + runtime
 python tools/dev.py build --compiler       # 仅编译 compiler
 python tools/dev.py build --runtime        # 仅编译 runtime
 python tools/dev.py test --all             # 运行全部测试（编译器 + 运行时 + 集成）
-python tools/dev.py test --compiler        # 仅编译器测试 (1140 xUnit)
-python tools/dev.py test --runtime         # 仅运行时测试 (426 GTest)
+python tools/dev.py test --compiler        # 仅编译器测试 (1153 xUnit)
+python tools/dev.py test --runtime         # 仅运行时测试 (425 GTest)
 python tools/dev.py test --coverage        # 测试 + 覆盖率 HTML 报告
 python tools/dev.py install                # 安装 runtime (Debug + Release)
 python tools/dev.py codegen HelloWorld     # 快速代码生成测试
