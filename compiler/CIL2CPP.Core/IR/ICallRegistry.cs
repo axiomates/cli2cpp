@@ -12,7 +12,7 @@ public static class ICallRegistry
     {
         // System.Object
         Register("System.Object", "MemberwiseClone", 0, "cil2cpp::object_memberwise_clone");
-        Register("System.Object", "GetType", 0, "cil2cpp::object_get_type");
+        Register("System.Object", "GetType", 0, "cil2cpp::object_get_type_managed");
 
         // System.String
         Register("System.String", "FastAllocateString", 1, "cil2cpp::string_fast_allocate");
@@ -34,6 +34,7 @@ public static class ICallRegistry
         Register("System.Environment", "get_TickCount", 0, "cil2cpp::icall::Environment_get_TickCount");
         Register("System.Environment", "get_TickCount64", 0, "cil2cpp::icall::Environment_get_TickCount64");
         Register("System.Environment", "get_ProcessorCount", 0, "cil2cpp::icall::Environment_get_ProcessorCount");
+        Register("System.Environment", "get_CurrentManagedThreadId", 0, "cil2cpp::icall::Environment_get_CurrentManagedThreadId");
 
         // System.GC
         Register("System.GC", "Collect", 0, "cil2cpp::gc_collect");
@@ -50,6 +51,7 @@ public static class ICallRegistry
 
         // System.Threading.Monitor
         Register("System.Threading.Monitor", "Enter", 1, "cil2cpp::icall::Monitor_Enter");
+        Register("System.Threading.Monitor", "Enter", 2, "cil2cpp::icall::Monitor_Enter2");
         Register("System.Threading.Monitor", "Exit", 1, "cil2cpp::icall::Monitor_Exit");
         Register("System.Threading.Monitor", "ReliableEnter", 2, "cil2cpp::icall::Monitor_ReliableEnter");
         Register("System.Threading.Monitor", "Wait", 2, "cil2cpp::icall::Monitor_Wait");
@@ -61,6 +63,12 @@ public static class ICallRegistry
 
         // System.Threading.Thread
         Register("System.Threading.Thread", "Sleep", 1, "cil2cpp::icall::Thread_Sleep");
+
+        // System.ArgumentNullException
+        Register("System.ArgumentNullException", "ThrowIfNull", 2, "cil2cpp::icall::ArgumentNullException_ThrowIfNull");
+
+        // System.ThrowHelper (BCL internal)
+        Register("System.ThrowHelper", "ThrowArgumentException", 1, "cil2cpp::icall::ThrowHelper_ThrowArgumentException");
 
         // System.Runtime.CompilerServices.RuntimeHelpers
         Register("System.Runtime.CompilerServices.RuntimeHelpers", "InitializeArray", 2,

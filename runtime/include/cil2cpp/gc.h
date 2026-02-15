@@ -43,9 +43,23 @@ void* alloc(size_t size, TypeInfo* type);
 void* alloc_array(TypeInfo* element_type, size_t length);
 
 /**
- * Trigger a garbage collection cycle.
+ * Trigger a full garbage collection cycle.
  */
 void collect();
+
+/**
+ * Enable or disable incremental garbage collection.
+ * Incremental mode spreads collection work across multiple small steps,
+ * reducing pause times. Enabled by default at init.
+ * Note: BoehmGC does not support disabling incremental mode once enabled.
+ */
+void set_incremental(bool enabled);
+
+/**
+ * Perform a small amount of incremental collection work.
+ * @return true if more work remains, false if collection is complete.
+ */
+bool collect_a_little();
 
 /**
  * Register the current thread with the GC.

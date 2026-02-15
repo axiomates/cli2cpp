@@ -23,7 +23,7 @@ public partial class IRBuilder
     /// Set of IL type full names that have C++ runtime implementations.
     /// These types get IsRuntimeProvided = true and should not emit struct definitions.
     /// </summary>
-    private static readonly HashSet<string> RuntimeProvidedTypes = new()
+    internal static readonly HashSet<string> RuntimeProvidedTypes = new()
     {
         "System.Object",
         "System.ValueType",
@@ -38,6 +38,9 @@ public partial class IRBuilder
         "System.Runtime.CompilerServices.AsyncTaskMethodBuilder",
         "System.Runtime.CompilerServices.IAsyncStateMachine",
         "System.Threading.Thread",
+        "System.Type",
+        "System.Span`1",
+        "System.ReadOnlySpan`1",
     };
 
     private readonly AssemblyReader _reader;
@@ -47,6 +50,13 @@ public partial class IRBuilder
 
     // volatile. prefix flag — set by Code.Volatile, consumed by next field access
     private bool _pendingVolatile;
+
+    // constrained. prefix type — set by Code.Constrained, consumed by next callvirt
+    private TypeReference? _constrainedType;
+
+    // Exception filter tracking — set during filter evaluation region (FilterStart → endfilter)
+    private bool _inFilterRegion;
+    private int _endfilterOffset = -1;
 
     // Multi-assembly mode fields (null in single-assembly mode)
     private AssemblySet? _assemblySet;
@@ -159,6 +169,12 @@ public partial class IRBuilder
         // Pass 1.5b: Create synthetic type for System.Threading.Thread (reference type)
         CreateThreadSyntheticType();
 
+        // Pass 1.5c: Create proxy types for well-known BCL interfaces (IDisposable, IEnumerable, etc.)
+        CreateBclInterfaceProxies();
+
+        // Pass 1.5d: Resolve parent interface relationships for BCL proxies
+        ResolveBclProxyInterfaces();
+
         // Pass 1.5: Create specialized types for each generic instantiation
         CreateGenericSpecializations();
 
@@ -244,6 +260,9 @@ public partial class IRBuilder
             if (!irType.IsInterface && !irType.IsValueType)
                 BuildInterfaceImpls(irType);
         }
+
+        // Pass 5.5: Collect custom attributes from Cecil metadata
+        PopulateCustomAttributes();
 
         // Pass 6: Convert method bodies (vtables are now available for virtual dispatch)
         foreach (var (methodDef, irMethod) in methodBodies)

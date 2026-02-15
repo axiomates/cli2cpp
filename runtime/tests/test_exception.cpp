@@ -742,3 +742,120 @@ TEST_F(ExceptionTest, CheckedConvUn_Int64ToInt64_LargeOverflow) {
     CIL2CPP_END_TRY
     EXPECT_TRUE(caught);
 }
+
+// ===== Exception Filter Macros =====
+
+TEST_F(ExceptionTest, FilterBegin_Accept) {
+    // Filter accepts: __filter_result = 1 → __exc_caught = true
+    bool handler_ran = false;
+    CIL2CPP_TRY
+        throw_null_reference();
+    CIL2CPP_FILTER_BEGIN
+        int32_t __filter_result = 1; // accept
+        if (__filter_result) { __exc_caught = true; } else { CIL2CPP_RETHROW; }
+        handler_ran = true;
+    CIL2CPP_END_TRY
+    EXPECT_TRUE(handler_ran);
+}
+
+TEST_F(ExceptionTest, FilterBegin_Reject) {
+    // Filter rejects: __filter_result = 0 → rethrow, caught by outer
+    bool outer_caught = false;
+    CIL2CPP_TRY
+        CIL2CPP_TRY
+            throw_null_reference();
+        CIL2CPP_FILTER_BEGIN
+            int32_t __filter_result = 0; // reject
+            if (__filter_result) { __exc_caught = true; } else { CIL2CPP_RETHROW; }
+        CIL2CPP_END_TRY
+    CIL2CPP_CATCH_ALL
+        outer_caught = true;
+    CIL2CPP_END_TRY
+    EXPECT_TRUE(outer_caught);
+}
+
+TEST_F(ExceptionTest, FilterBegin_ExceptionAccessible) {
+    // Filter can access the exception object
+    bool is_null_ref = false;
+    CIL2CPP_TRY
+        throw_null_reference();
+    CIL2CPP_FILTER_BEGIN
+        // In generated code, __exc_ctx.current_exception is the caught exception
+        is_null_ref = (__exc_ctx.current_exception != nullptr);
+        int32_t __filter_result = 1;
+        if (__filter_result) { __exc_caught = true; } else { CIL2CPP_RETHROW; }
+    CIL2CPP_END_TRY
+    EXPECT_TRUE(is_null_ref);
+}
+
+// ===== Custom Attribute Query Tests =====
+
+TEST_F(ExceptionTest, TypeHasAttribute_Found) {
+    static CustomAttributeInfo attrs[] = {
+        { .attribute_type_name = "System.ObsoleteAttribute", .args = nullptr, .arg_count = 0 },
+    };
+    static TypeInfo testType = {
+        .name = "Test", .namespace_name = "NS", .full_name = "NS.Test",
+        .base_type = nullptr, .interfaces = nullptr, .interface_count = 0,
+        .instance_size = sizeof(Object), .element_size = 0,
+        .flags = TypeFlags::None, .vtable = nullptr,
+        .fields = nullptr, .field_count = 0,
+        .methods = nullptr, .method_count = 0,
+        .default_ctor = nullptr, .finalizer = nullptr,
+        .interface_vtables = nullptr, .interface_vtable_count = 0,
+        .custom_attributes = attrs, .custom_attribute_count = 1,
+    };
+    EXPECT_TRUE(type_has_attribute(&testType, "System.ObsoleteAttribute"));
+    EXPECT_FALSE(type_has_attribute(&testType, "System.SerializableAttribute"));
+}
+
+TEST_F(ExceptionTest, TypeGetAttribute_ReturnsCorrect) {
+    static CustomAttributeArg args[] = {
+        { .type_name = "System.String", .string_val = "deprecated" },
+    };
+    static CustomAttributeInfo attrs[] = {
+        { .attribute_type_name = "System.ObsoleteAttribute", .args = args, .arg_count = 1 },
+    };
+    static TypeInfo testType = {
+        .name = "Test", .namespace_name = "NS", .full_name = "NS.Test",
+        .base_type = nullptr, .interfaces = nullptr, .interface_count = 0,
+        .instance_size = sizeof(Object), .element_size = 0,
+        .flags = TypeFlags::None, .vtable = nullptr,
+        .fields = nullptr, .field_count = 0,
+        .methods = nullptr, .method_count = 0,
+        .default_ctor = nullptr, .finalizer = nullptr,
+        .interface_vtables = nullptr, .interface_vtable_count = 0,
+        .custom_attributes = attrs, .custom_attribute_count = 1,
+    };
+    auto* attr = type_get_attribute(&testType, "System.ObsoleteAttribute");
+    ASSERT_NE(attr, nullptr);
+    EXPECT_EQ(attr->arg_count, 1u);
+    EXPECT_STREQ(attr->args[0].string_val, "deprecated");
+}
+
+TEST_F(ExceptionTest, MethodHasAttribute_Found) {
+    static CustomAttributeInfo attrs[] = {
+        { .attribute_type_name = "System.ObsoleteAttribute", .args = nullptr, .arg_count = 0 },
+    };
+    static MethodInfo method = {
+        .name = "OldMethod", .declaring_type = nullptr, .return_type = nullptr,
+        .parameter_types = nullptr, .parameter_count = 0,
+        .method_pointer = nullptr, .flags = 0, .vtable_slot = -1,
+        .custom_attributes = attrs, .custom_attribute_count = 1,
+    };
+    EXPECT_TRUE(method_has_attribute(&method, "System.ObsoleteAttribute"));
+    EXPECT_FALSE(method_has_attribute(&method, "System.SerializableAttribute"));
+}
+
+TEST_F(ExceptionTest, FieldHasAttribute_Found) {
+    static CustomAttributeInfo attrs[] = {
+        { .attribute_type_name = "System.ObsoleteAttribute", .args = nullptr, .arg_count = 0 },
+    };
+    static FieldInfo field = {
+        .name = "OldField", .declaring_type = nullptr, .field_type = nullptr,
+        .offset = 0, .flags = 0,
+        .custom_attributes = attrs, .custom_attribute_count = 1,
+    };
+    EXPECT_TRUE(field_has_attribute(&field, "System.ObsoleteAttribute"));
+    EXPECT_FALSE(field_has_attribute(&field, "System.SerializableAttribute"));
+}

@@ -26,10 +26,13 @@ namespace cil2cpp {
 thread_local ExceptionContext* g_exception_context = nullptr;
 
 // Exception type infos (forward declarations)
+extern TypeInfo Exception_TypeInfo;
 extern TypeInfo NullReferenceException_TypeInfo;
 extern TypeInfo IndexOutOfRangeException_TypeInfo;
 extern TypeInfo InvalidCastException_TypeInfo;
 extern TypeInfo InvalidOperationException_TypeInfo;
+extern TypeInfo ArgumentException_TypeInfo;
+extern TypeInfo ArgumentNullException_TypeInfo;
 extern TypeInfo OverflowException_TypeInfo;
 
 [[noreturn]] void throw_exception(Exception* ex) {
@@ -96,6 +99,18 @@ static Exception* create_exception(TypeInfo* type, const char* message) {
 [[noreturn]] void throw_overflow() {
     Exception* ex = create_exception(&OverflowException_TypeInfo,
                                       "Arithmetic operation resulted in an overflow.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_argument_null() {
+    Exception* ex = create_exception(&ArgumentNullException_TypeInfo,
+                                      "Value cannot be null.");
+    throw_exception(ex);
+}
+
+[[noreturn]] void throw_argument() {
+    Exception* ex = create_exception(&ArgumentException_TypeInfo,
+                                      "Value does not fall within the expected range.");
     throw_exception(ex);
 }
 
@@ -208,6 +223,27 @@ String* capture_stack_trace() {
 }
 
 // Exception type infos
+TypeInfo Exception_TypeInfo = {
+    .name = "Exception",
+    .namespace_name = "System",
+    .full_name = "System.Exception",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = sizeof(Exception),
+    .element_size = 0,
+    .flags = TypeFlags::None,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+};
+
 TypeInfo NullReferenceException_TypeInfo = {
     .name = "NullReferenceException",
     .namespace_name = "System",
@@ -292,11 +328,53 @@ TypeInfo InvalidOperationException_TypeInfo = {
     .interface_vtable_count = 0,
 };
 
+TypeInfo ArgumentException_TypeInfo = {
+    .name = "ArgumentException",
+    .namespace_name = "System",
+    .full_name = "System.ArgumentException",
+    .base_type = &Exception_TypeInfo,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = sizeof(ArgumentException),
+    .element_size = 0,
+    .flags = TypeFlags::None,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+};
+
+TypeInfo ArgumentNullException_TypeInfo = {
+    .name = "ArgumentNullException",
+    .namespace_name = "System",
+    .full_name = "System.ArgumentNullException",
+    .base_type = &ArgumentException_TypeInfo,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = sizeof(ArgumentNullException),
+    .element_size = 0,
+    .flags = TypeFlags::None,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+};
+
 TypeInfo OverflowException_TypeInfo = {
     .name = "OverflowException",
     .namespace_name = "System",
     .full_name = "System.OverflowException",
-    .base_type = nullptr,
+    .base_type = &Exception_TypeInfo,
     .interfaces = nullptr,
     .interface_count = 0,
     .instance_size = sizeof(OverflowException),

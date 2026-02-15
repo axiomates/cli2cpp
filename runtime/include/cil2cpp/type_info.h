@@ -29,6 +29,78 @@ inline bool operator&(TypeFlags a, TypeFlags b) {
     return (static_cast<UInt32>(a) & static_cast<UInt32>(b)) != 0;
 }
 
+// ECMA-335 II.23.1.5 — Field attributes
+enum class FieldAttributeFlags : UInt32 {
+    FieldAccessMask = 0x0007,
+    Private         = 0x0001,
+    FamANDAssem     = 0x0002,
+    Assembly        = 0x0003,
+    Family          = 0x0004,
+    FamORAssem      = 0x0005,
+    Public          = 0x0006,
+    Static          = 0x0010,
+    InitOnly        = 0x0020,
+    Literal         = 0x0040,
+    NotSerialized   = 0x0080,
+    HasFieldRVA     = 0x0100,
+};
+
+inline FieldAttributeFlags operator|(FieldAttributeFlags a, FieldAttributeFlags b) {
+    return static_cast<FieldAttributeFlags>(static_cast<UInt32>(a) | static_cast<UInt32>(b));
+}
+
+inline bool operator&(FieldAttributeFlags a, FieldAttributeFlags b) {
+    return (static_cast<UInt32>(a) & static_cast<UInt32>(b)) != 0;
+}
+
+// ECMA-335 II.23.1.10 — Method attributes
+enum class MethodAttributeFlags : UInt32 {
+    MemberAccessMask = 0x0007,
+    Private          = 0x0001,
+    FamANDAssem      = 0x0002,
+    Assembly         = 0x0003,
+    Family           = 0x0004,
+    FamORAssem       = 0x0005,
+    Public           = 0x0006,
+    Static           = 0x0010,
+    Final            = 0x0020,
+    Virtual          = 0x0040,
+    HideBySig        = 0x0080,
+    NewSlot          = 0x0100,
+    Abstract         = 0x0400,
+    SpecialName      = 0x0800,
+    RTSpecialName    = 0x1000,
+};
+
+inline MethodAttributeFlags operator|(MethodAttributeFlags a, MethodAttributeFlags b) {
+    return static_cast<MethodAttributeFlags>(static_cast<UInt32>(a) | static_cast<UInt32>(b));
+}
+
+inline bool operator&(MethodAttributeFlags a, MethodAttributeFlags b) {
+    return (static_cast<UInt32>(a) & static_cast<UInt32>(b)) != 0;
+}
+
+/**
+ * Custom attribute constructor argument value.
+ */
+struct CustomAttributeArg {
+    const char* type_name;
+    union {
+        Int64 int_val;
+        double float_val;
+        const char* string_val;
+    };
+};
+
+/**
+ * Custom attribute metadata.
+ */
+struct CustomAttributeInfo {
+    const char* attribute_type_name;
+    CustomAttributeArg* args;
+    UInt32 arg_count;
+};
+
 /**
  * Method information for reflection and virtual dispatch.
  */
@@ -41,6 +113,8 @@ struct MethodInfo {
     void* method_pointer;       // Actual function pointer
     UInt32 flags;
     Int32 vtable_slot;          // -1 if not virtual
+    CustomAttributeInfo* custom_attributes;
+    UInt32 custom_attribute_count;
 };
 
 /**
@@ -52,6 +126,8 @@ struct FieldInfo {
     TypeInfo* field_type;
     UInt32 offset;              // Offset in object
     UInt32 flags;
+    CustomAttributeInfo* custom_attributes;
+    UInt32 custom_attribute_count;
 };
 
 /**
@@ -109,6 +185,17 @@ struct TypeInfo {
     // Interface dispatch tables
     InterfaceVTable* interface_vtables;
     UInt32 interface_vtable_count;
+
+    // Custom attributes
+    CustomAttributeInfo* custom_attributes;
+    UInt32 custom_attribute_count;
+
+    // Generic variance data (for variance-aware type assignability)
+    // For generic instances: concrete argument TypeInfos + variance flags from open type
+    TypeInfo** generic_arguments;        // nullptr for non-generic types
+    uint8_t* generic_variances;           // 0=invariant, 1=covariant, 2=contravariant
+    UInt32 generic_argument_count;
+    const char* generic_definition_name; // Open type's full_name, or nullptr
 };
 
 /**
@@ -145,5 +232,25 @@ TypeInfo* type_get_by_name(const char* full_name);
  * Register a type with the runtime.
  */
 void type_register(TypeInfo* type);
+
+/**
+ * Check if a type has a specific custom attribute.
+ */
+Boolean type_has_attribute(TypeInfo* type, const char* attr_type_name);
+
+/**
+ * Get a custom attribute from a type (returns nullptr if not found).
+ */
+CustomAttributeInfo* type_get_attribute(TypeInfo* type, const char* attr_type_name);
+
+/**
+ * Check if a method has a specific custom attribute.
+ */
+Boolean method_has_attribute(MethodInfo* method, const char* attr_type_name);
+
+/**
+ * Check if a field has a specific custom attribute.
+ */
+Boolean field_has_attribute(FieldInfo* field, const char* attr_type_name);
 
 } // namespace cil2cpp

@@ -378,3 +378,132 @@ TEST_F(ArrayTest, Create_DifferentTypes_CorrectElementType) {
     EXPECT_EQ(dblArr->element_type, &DoubleElementType);
     EXPECT_EQ(objArr->element_type, &ObjectElementType);
 }
+
+// ===== Multi-dimensional array tests =====
+
+TEST_F(ArrayTest, MdArray_Create_2D_NonNull) {
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+}
+
+TEST_F(ArrayTest, MdArray_Create_2D_CorrectMetadata) {
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(arr->rank, 2);
+    EXPECT_EQ(arr->total_length, 12);
+    EXPECT_EQ(arr->element_type, &Int32ElementType);
+}
+
+TEST_F(ArrayTest, MdArray_Create_2D_CorrectLengths) {
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(mdarray_get_length(arr, 0), 3);
+    EXPECT_EQ(mdarray_get_length(arr, 1), 4);
+}
+
+TEST_F(ArrayTest, MdArray_Create_3D_CorrectMetadata) {
+    Int32 lens[] = { 2, 3, 4 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 3, lens);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_EQ(arr->rank, 3);
+    EXPECT_EQ(arr->total_length, 24);
+    EXPECT_EQ(mdarray_get_length(arr, 0), 2);
+    EXPECT_EQ(mdarray_get_length(arr, 1), 3);
+    EXPECT_EQ(mdarray_get_length(arr, 2), 4);
+}
+
+TEST_F(ArrayTest, MdArray_SetGet_2D_RowMajor) {
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+
+    // Set arr[1,2] = 42
+    Int32 set_idx[] = { 1, 2 };
+    auto* ptr = static_cast<int32_t*>(mdarray_get_element_ptr(arr, set_idx));
+    *ptr = 42;
+
+    // Get arr[1,2]
+    Int32 get_idx[] = { 1, 2 };
+    auto* ptr2 = static_cast<int32_t*>(mdarray_get_element_ptr(arr, get_idx));
+    EXPECT_EQ(*ptr2, 42);
+
+    // arr[0,0] should still be 0 (zero-initialized by GC_MALLOC)
+    Int32 zero_idx[] = { 0, 0 };
+    auto* ptr3 = static_cast<int32_t*>(mdarray_get_element_ptr(arr, zero_idx));
+    EXPECT_EQ(*ptr3, 0);
+}
+
+TEST_F(ArrayTest, MdArray_SetGet_2D_AllElements) {
+    Int32 lens[] = { 2, 3 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+
+    // Fill with sequential values
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 3; j++) {
+            Int32 idx[] = { i, j };
+            *static_cast<int32_t*>(mdarray_get_element_ptr(arr, idx)) = i * 10 + j;
+        }
+    }
+
+    // Verify
+    for (int i = 0; i < 2; i++) {
+        for (int j = 0; j < 3; j++) {
+            Int32 idx[] = { i, j };
+            EXPECT_EQ(*static_cast<int32_t*>(mdarray_get_element_ptr(arr, idx)), i * 10 + j);
+        }
+    }
+}
+
+TEST_F(ArrayTest, MdArray_IsMdarray_Flag) {
+    Int32 lens[] = { 2, 3 };
+    MdArray* arr = mdarray_create(&Int32ElementType, 2, lens);
+    ASSERT_NE(arr, nullptr);
+    EXPECT_TRUE(is_mdarray(reinterpret_cast<Object*>(arr)));
+
+    // Regular 1D array should NOT be mdarray
+    Array* arr1d = array_create(&Int32ElementType, 5);
+    EXPECT_FALSE(is_mdarray(reinterpret_cast<Object*>(arr1d)));
+}
+
+TEST_F(ArrayTest, MdArray_ICall_GetRank) {
+    // 1D array
+    Array* arr1d = array_create(&Int32ElementType, 5);
+    EXPECT_EQ(array_get_rank(reinterpret_cast<Object*>(arr1d)), 1);
+
+    // 2D array
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr2d = mdarray_create(&Int32ElementType, 2, lens);
+    EXPECT_EQ(array_get_rank(reinterpret_cast<Object*>(arr2d)), 2);
+
+    // 3D array
+    Int32 lens3[] = { 2, 3, 4 };
+    MdArray* arr3d = mdarray_create(&Int32ElementType, 3, lens3);
+    EXPECT_EQ(array_get_rank(reinterpret_cast<Object*>(arr3d)), 3);
+}
+
+TEST_F(ArrayTest, MdArray_ICall_GetLength) {
+    // 1D array
+    Array* arr1d = array_create(&Int32ElementType, 7);
+    EXPECT_EQ(array_get_length(reinterpret_cast<Object*>(arr1d)), 7);
+
+    // 2D array (total length = 3*4 = 12)
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr2d = mdarray_create(&Int32ElementType, 2, lens);
+    EXPECT_EQ(array_get_length(reinterpret_cast<Object*>(arr2d)), 12);
+}
+
+TEST_F(ArrayTest, MdArray_ICall_GetLengthDim) {
+    // 1D array: dim 0 = length
+    Array* arr1d = array_create(&Int32ElementType, 7);
+    EXPECT_EQ(array_get_length_dim(reinterpret_cast<Object*>(arr1d), 0), 7);
+
+    // 2D array: dim 0 = 3, dim 1 = 4
+    Int32 lens[] = { 3, 4 };
+    MdArray* arr2d = mdarray_create(&Int32ElementType, 2, lens);
+    EXPECT_EQ(array_get_length_dim(reinterpret_cast<Object*>(arr2d), 0), 3);
+    EXPECT_EQ(array_get_length_dim(reinterpret_cast<Object*>(arr2d), 1), 4);
+}

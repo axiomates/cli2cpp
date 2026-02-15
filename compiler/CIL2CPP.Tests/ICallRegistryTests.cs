@@ -8,7 +8,7 @@ public class ICallRegistryTests
     // System.Object
     [Theory]
     [InlineData("System.Object", "MemberwiseClone", 0, "cil2cpp::object_memberwise_clone")]
-    [InlineData("System.Object", "GetType", 0, "cil2cpp::object_get_type")]
+    [InlineData("System.Object", "GetType", 0, "cil2cpp::object_get_type_managed")]
     public void Lookup_SystemObject_ReturnsCorrectCppName(string type, string method, int paramCount, string expected)
     {
         var result = ICallRegistry.Lookup(type, method, paramCount);

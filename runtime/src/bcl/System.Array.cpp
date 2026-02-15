@@ -3,6 +3,7 @@
  */
 
 #include <cil2cpp/array.h>
+#include <cil2cpp/mdarray.h>
 #include <cil2cpp/gc.h>
 #include <cil2cpp/exception.h>
 #include <cil2cpp/type_info.h>
@@ -60,6 +61,37 @@ void array_bounds_check(Array* arr, Int32 index) {
     if (index < 0 || index >= arr->length) {
         throw_index_out_of_range();
     }
+}
+
+// ===== ICall functions for System.Array (work with both 1D and multi-dim) =====
+
+Int32 array_get_length(Object* obj) {
+    if (!obj) { throw_null_reference(); return 0; }
+    if (is_mdarray(obj)) {
+        return static_cast<MdArray*>(obj)->total_length;
+    }
+    return static_cast<Array*>(obj)->length;
+}
+
+Int32 array_get_rank(Object* obj) {
+    if (!obj) { throw_null_reference(); return 0; }
+    if (is_mdarray(obj)) {
+        return static_cast<MdArray*>(obj)->rank;
+    }
+    return 1;
+}
+
+Int32 array_get_length_dim(Object* obj, Int32 dimension) {
+    if (!obj) { throw_null_reference(); return 0; }
+    if (is_mdarray(obj)) {
+        return mdarray_get_length(static_cast<MdArray*>(obj), dimension);
+    }
+    // 1D array: only dimension 0 is valid
+    if (dimension != 0) {
+        throw_index_out_of_range();
+        return 0;
+    }
+    return static_cast<Array*>(obj)->length;
 }
 
 } // namespace cil2cpp

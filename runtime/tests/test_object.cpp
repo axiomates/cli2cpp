@@ -292,20 +292,8 @@ TEST_F(ObjectTest, As_NullObject_ReturnsNull) {
 
 // ===== object_cast with null =====
 
-TEST_F(ObjectTest, Cast_NullObject_Throws) {
-    ExceptionContext ctx;
-    ctx.previous = g_exception_context;
-    ctx.current_exception = nullptr;
-    ctx.state = 0;
-    g_exception_context = &ctx;
-
-    if (setjmp(ctx.jump_buffer) == 0) {
-        object_cast(nullptr, &TestObjType);
-        g_exception_context = ctx.previous;
-        FAIL() << "Expected InvalidCastException";
-    } else {
-        g_exception_context = ctx.previous;
-        ASSERT_NE(ctx.current_exception, nullptr);
-        SUCCEED();
-    }
+// ECMA-335: castclass on null returns null (not an exception)
+TEST_F(ObjectTest, Cast_NullObject_ReturnsNull) {
+    Object* result = object_cast(nullptr, &TestObjType);
+    EXPECT_EQ(result, nullptr);
 }

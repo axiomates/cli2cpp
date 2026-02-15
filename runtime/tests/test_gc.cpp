@@ -220,3 +220,26 @@ TEST_F(GCTest, Finalizer_RunsOnCollect) {
     // stack residue, so we accept both outcomes
     EXPECT_GE(g_finalizer_count, 0);
 }
+
+// ===== Incremental GC =====
+
+TEST_F(GCTest, CollectALittle_DoesNotCrash) {
+    // Allocate objects to create GC work
+    for (int i = 0; i < 100; i++) {
+        gc::alloc(TestType.instance_size, &TestType);
+    }
+    // Perform incremental collection steps
+    for (int i = 0; i < 10; i++) {
+        gc::collect_a_little();
+    }
+}
+
+TEST_F(GCTest, SetIncremental_DoesNotCrash) {
+    // Incremental mode is already enabled at init;
+    // re-enabling should be safe
+    gc::set_incremental(true);
+    for (int i = 0; i < 50; i++) {
+        gc::alloc(TestType.instance_size, &TestType);
+    }
+    gc::collect_a_little();
+}

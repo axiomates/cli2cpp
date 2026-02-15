@@ -9,6 +9,8 @@
 #include "object.h"
 #include "string.h"
 #include "array.h"
+#include "mdarray.h"
+#include "stackalloc.h"
 #include "gc.h"
 #include "exception.h"
 #include "type_info.h"
@@ -17,6 +19,10 @@
 #include "icall.h"
 #include "checked.h"
 #include "task.h"
+#include "threadpool.h"
+#include "threading.h"
+#include "reflection.h"
+#include "collections.h"
 
 // BCL types
 #include "bcl/System.Object.h"
@@ -39,8 +45,9 @@ void runtime_shutdown();
 
 } // namespace cil2cpp
 
-// System.Object constructor (used by generated code)
+// System.Object methods (used by generated code)
 void System_Object__ctor(void* obj);
+inline void System_Object_Finalize(void*) {} // Finalize is a no-op for System.Object
 
 // Entry point macro for generated code
 #define CIL2CPP_MAIN(EntryClass, EntryMethod) \

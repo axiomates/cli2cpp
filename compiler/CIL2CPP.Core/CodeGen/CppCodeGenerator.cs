@@ -143,6 +143,29 @@ public partial class CppCodeGenerator
         sb.AppendLine($"target_link_libraries({projectName} {linkVisibility} cil2cpp::runtime)");
         sb.AppendLine();
 
+        // P/Invoke native library linking
+        var pinvokeModules = _module.Types
+            .SelectMany(t => t.Methods)
+            .Where(m => m.IsPInvoke && !string.IsNullOrEmpty(m.PInvokeModule))
+            .Select(m => m.PInvokeModule!)
+            .Distinct()
+            .ToList();
+        if (pinvokeModules.Count > 0)
+        {
+            sb.AppendLine("# P/Invoke native libraries");
+            foreach (var mod in pinvokeModules)
+            {
+                // Strip .dll/.so extension for CMake library name
+                var libName = mod;
+                if (libName.EndsWith(".dll", StringComparison.OrdinalIgnoreCase))
+                    libName = libName[..^4];
+                else if (libName.EndsWith(".so", StringComparison.OrdinalIgnoreCase))
+                    libName = libName[..^3];
+                sb.AppendLine($"target_link_libraries({projectName} PRIVATE {libName})");
+            }
+            sb.AppendLine();
+        }
+
         // Debug/Release settings for generated code
         sb.AppendLine($"target_compile_definitions({projectName} {linkVisibility}");
         sb.AppendLine("    $<$<CONFIG:Debug>:CIL2CPP_DEBUG>)");

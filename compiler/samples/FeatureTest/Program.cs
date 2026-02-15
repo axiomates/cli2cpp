@@ -1,4 +1,6 @@
 using System;
+using System.Collections;
+using System.Collections.Generic;
 using System.Threading;
 using System.Threading.Tasks;
 
@@ -166,6 +168,42 @@ public class DisposableResource : IMyDisposable
             Console.WriteLine(string.Concat("Disposed: ", _name));
             _disposed = true;
         }
+    }
+}
+
+// Real IDisposable implementation (BCL interface proxy)
+public class ManagedResource : IDisposable
+{
+    private string _name;
+    private bool _disposed;
+
+    public ManagedResource(string name)
+    {
+        _name = name;
+    }
+
+    public void Dispose()
+    {
+        if (!_disposed)
+        {
+            Console.WriteLine(string.Concat("Disposed managed: ", _name));
+            _disposed = true;
+        }
+    }
+}
+
+// IComparable implementation (BCL interface proxy)
+public class Priority : IComparable
+{
+    public int Value;
+
+    public Priority(int value) { Value = value; }
+
+    public int CompareTo(object? other)
+    {
+        if (other is Priority p)
+            return Value - p.Value;
+        return 0;
     }
 }
 
@@ -586,6 +624,7 @@ public class Program
         TestProperties();
         TestForeachArray();
         TestUsing();
+        TestUsingStatement();
         TestDelegate();
         TestGenerics();
         TestRethrow();
@@ -646,6 +685,16 @@ public class Program
         TestStringSlice();
         TestIndexProperties();
         TestRangeGetOffsetAndLength();
+        TestTypeof();
+        TestGetType();
+        TestTypeEquality();
+        TestTypeHierarchy();
+        TestTypeToString();
+        TestGetTypeOnValueType();
+        TestListInt();
+        TestListString();
+        TestDictionaryStringInt();
+        TestAsyncConcurrency();
     }
 
     static void TestArithmetic()
@@ -999,6 +1048,49 @@ public class Program
         Console.WriteLine("Using resource");
         res.Dispose();
         // Should print: "Using resource" then "Disposed: test"
+    }
+
+    static void TestUsingStatement()
+    {
+        // Real using statement with System.IDisposable
+        using (var res = new ManagedResource("auto"))
+        {
+            Console.WriteLine("Inside using");
+        }
+        // Should print: "Inside using" then "Disposed managed: auto"
+    }
+
+    static void TestExceptionFilter()
+    {
+        // catch (Exception e) when (condition) — ECMA-335 filter handler
+        int result = 0;
+        try
+        {
+            throw new InvalidOperationException();
+        }
+        catch (Exception) when (result == 0)
+        {
+            result = 1;
+        }
+        Console.WriteLine(result); // 1
+
+        // Filter that rejects — exception should propagate
+        try
+        {
+            try
+            {
+                throw new InvalidOperationException();
+            }
+            catch (Exception) when (false)
+            {
+                result = -1; // Should not reach here
+            }
+        }
+        catch (Exception)
+        {
+            result = 2; // Caught by outer handler
+        }
+        Console.WriteLine(result); // 2
     }
 
     static int StaticAdd(int a, int b)
@@ -1952,5 +2044,493 @@ public class Program
         long val = 0;
         Interlocked.Increment(ref val);
         Console.WriteLine(val);  // 1
+    }
+
+    // ===== Reflection Tests =====
+
+    // Exercises typeof(T) → ldtoken + GetTypeFromHandle → Type properties
+    static void TestTypeof()
+    {
+        Type t = typeof(int);
+        Console.WriteLine(t.Name);       // Int32
+        Console.WriteLine(t.FullName);   // System.Int32
+        Console.WriteLine(t.IsValueType); // True
+        Console.WriteLine(t.IsPrimitive); // True
+        Console.WriteLine(t.IsClass);     // False
+    }
+
+    // Exercises obj.GetType() → object_get_type_managed → Type
+    static void TestGetType()
+    {
+        object obj = new Dog("test");
+        Type t = obj.GetType();
+        Console.WriteLine(t.Name);       // Dog
+    }
+
+    // Exercises Type equality (op_Equality, op_Inequality) via cached Type objects
+    static void TestTypeEquality()
+    {
+        Type t1 = typeof(int);
+        Type t2 = typeof(int);
+        Console.WriteLine(t1 == t2);    // True  (same cached Type object)
+        Type t3 = typeof(string);
+        Console.WriteLine(t1 == t3);    // False (different types)
+        Console.WriteLine(t1 != t3);    // True
+    }
+
+    // Exercises Type.BaseType, IsAbstract, IsSealed, IsInterface
+    static void TestTypeHierarchy()
+    {
+        Type t = typeof(Dog);
+        Console.WriteLine(t.BaseType != null); // True (Animal)
+        Console.WriteLine(t.IsAbstract);       // False
+        Console.WriteLine(t.IsSealed);         // False
+        Console.WriteLine(t.IsInterface);      // False
+    }
+
+    // Exercises Type.ToString() → returns FullName
+    static void TestTypeToString()
+    {
+        Type t = typeof(Dog);
+        Console.WriteLine(t.ToString()); // Dog
+    }
+
+    // Exercises boxing + GetType on value type
+    static void TestGetTypeOnValueType()
+    {
+        int x = 42;
+        Type t = x.GetType();
+        Console.WriteLine(t.Name);       // Int32
+        Console.WriteLine(t.IsValueType); // True
+    }
+
+    // ===== Collection tests (List<T>, Dictionary<K,V>) =====
+
+    static void TestListInt()
+    {
+        var list = new List<int>();
+        list.Add(10);
+        list.Add(20);
+        list.Add(30);
+        Console.WriteLine(list.Count);   // 3
+        Console.WriteLine(list[0]);      // 10
+        Console.WriteLine(list[1]);      // 20
+        list[1] = 25;
+        Console.WriteLine(list[1]);      // 25
+        list.RemoveAt(0);
+        Console.WriteLine(list.Count);   // 2
+        Console.WriteLine(list[0]);      // 25
+        list.Insert(0, 5);
+        Console.WriteLine(list[0]);      // 5
+        Console.WriteLine(list.Contains(25)); // True
+        Console.WriteLine(list.IndexOf(30));  // 2
+        list.Clear();
+        Console.WriteLine(list.Count);   // 0
+    }
+
+    static void TestListString()
+    {
+        var list = new List<string>();
+        list.Add("hello");
+        list.Add("world");
+        Console.WriteLine(list.Count);   // 2
+        Console.WriteLine(list[0]);      // hello
+        Console.WriteLine(list[1]);      // world
+        list.Remove("hello");
+        Console.WriteLine(list.Count);   // 1
+        Console.WriteLine(list[0]);      // world
+    }
+
+    static void TestDictionaryStringInt()
+    {
+        var dict = new Dictionary<string, int>();
+        dict["one"] = 1;
+        dict["two"] = 2;
+        dict["three"] = 3;
+        Console.WriteLine(dict.Count);             // 3
+        Console.WriteLine(dict["two"]);            // 2
+        Console.WriteLine(dict.ContainsKey("one"));  // True
+        Console.WriteLine(dict.ContainsKey("four")); // False
+        dict.Remove("two");
+        Console.WriteLine(dict.Count);             // 2
+        int val;
+        if (dict.TryGetValue("three", out val))
+            Console.WriteLine(val);                // 3
+        dict.Clear();
+        Console.WriteLine(dict.Count);             // 0
+    }
+
+    // ===== Async Concurrency Tests =====
+
+    static async Task<int> DelayAndReturn(int value)
+    {
+        await Task.Delay(50);
+        return value;
+    }
+
+    static void TestAsyncConcurrency()
+    {
+        // Test Task.Delay — real async delay
+        var delayTask = DelayAndReturn(99);
+        Console.WriteLine(delayTask.Result);  // 99
+
+        // Test Task.FromResult
+        var fromResult = Task.FromResult(42);
+        Console.WriteLine(fromResult.Result);  // 42
+
+        // Test basic async/await with delay
+        var computeTask = ComputeAsync(10);
+        Console.WriteLine(computeTask.Result); // 20
+    }
+}
+
+// Custom attribute for testing
+[AttributeUsage(AttributeTargets.All)]
+public class DescriptionAttribute : Attribute
+{
+    public string Text { get; }
+    public DescriptionAttribute(string text) { Text = text; }
+}
+
+// Type with custom attributes
+[Obsolete("Use NewClass instead")]
+[Description("A test class with attributes")]
+public class AttributeTestClass
+{
+    [Obsolete("Use NewField")]
+    public int OldField;
+
+    [Description("Important method")]
+    public void AnnotatedMethod() { }
+}
+
+// Multi-dimensional array test class
+public class MdArrayTest
+{
+    public static int[,] Create2D()
+    {
+        var arr = new int[3, 4];
+        arr[0, 0] = 1;
+        arr[1, 2] = 42;
+        arr[2, 3] = 99;
+        return arr;
+    }
+
+    public static int Get2D(int[,] arr, int i, int j)
+    {
+        return arr[i, j];
+    }
+
+    public static void Set2D(int[,] arr, int i, int j, int value)
+    {
+        arr[i, j] = value;
+    }
+
+    public static int GetTotalLength(int[,] arr)
+    {
+        return arr.Length;
+    }
+
+    public static int GetDimLength(int[,] arr, int dim)
+    {
+        return arr.GetLength(dim);
+    }
+
+    public static int GetRank(int[,] arr)
+    {
+        return arr.Rank;
+    }
+
+    public static string[,] Create2DString()
+    {
+        var arr = new string[2, 2];
+        arr[0, 0] = "hello";
+        arr[1, 1] = "world";
+        return arr;
+    }
+}
+
+// Default Interface Methods (DIM) test
+public interface IGreeter
+{
+    // Abstract method — must be implemented by class
+    string GetName();
+
+    // Default method — provides a default implementation
+    string Greet()
+    {
+        return "Hello, " + GetName() + "!";
+    }
+
+    // Default method that returns a constant
+    int Version() => 1;
+}
+
+public interface ILogger2
+{
+    // Default method only — no abstract members
+    string Log(string message) => "[LOG] " + message;
+}
+
+// Class that uses default Greet() but implements GetName()
+public class DefaultGreeterUser : IGreeter
+{
+    public string GetName() => "World";
+    // Greet() uses default from IGreeter
+}
+
+// Class that overrides the default Greet()
+public class CustomGreeterUser : IGreeter
+{
+    public string GetName() => "Custom";
+    public string Greet() => "Hey there, " + GetName() + "!";
+    public int Version() => 2;  // Override default
+}
+
+// Class implementing interface with only default methods
+public class LoggerUser : ILogger2
+{
+    // Uses all defaults from ILogger2
+}
+
+public static class DIMTest
+{
+    public static string DefaultGreet()
+    {
+        IGreeter g = new DefaultGreeterUser();
+        return g.Greet();
+    }
+
+    public static string CustomGreet()
+    {
+        IGreeter g = new CustomGreeterUser();
+        return g.Greet();
+    }
+
+    public static int DefaultVersion()
+    {
+        IGreeter g = new DefaultGreeterUser();
+        return g.Version();
+    }
+
+    public static int OverriddenVersion()
+    {
+        IGreeter g = new CustomGreeterUser();
+        return g.Version();
+    }
+
+    public static string DefaultLog()
+    {
+        ILogger2 l = new LoggerUser();
+        return l.Log("test");
+    }
+}
+
+// Span<T> test class
+public static class SpanTest
+{
+    public static int SpanFromArray()
+    {
+        int[] arr = new int[] { 10, 20, 30, 40, 50 };
+        Span<int> span = new Span<int>(arr);
+        return span.Length;
+    }
+
+    public static int SpanGetItem()
+    {
+        int[] arr = new int[] { 10, 20, 30, 40, 50 };
+        Span<int> span = new Span<int>(arr);
+        return span[2]; // should be 30
+    }
+
+    public static int SpanSlice()
+    {
+        int[] arr = new int[] { 10, 20, 30, 40, 50 };
+        Span<int> span = new Span<int>(arr);
+        Span<int> sliced = span.Slice(1, 3);
+        return sliced.Length; // should be 3
+    }
+
+    public static int ReadOnlySpanLength()
+    {
+        int[] arr = new int[] { 1, 2, 3 };
+        ReadOnlySpan<int> span = new ReadOnlySpan<int>(arr);
+        return span.Length;
+    }
+
+    public static unsafe int SpanFromPointer()
+    {
+        int* buf = stackalloc int[4];
+        buf[0] = 100;
+        buf[1] = 200;
+        Span<int> span = new Span<int>(buf, 4);
+        return span[0]; // should be 100
+    }
+}
+
+// P/Invoke test class
+public static class PInvokeTest
+{
+    [System.Runtime.InteropServices.DllImport("msvcrt.dll", EntryPoint = "abs")]
+    public static extern int NativeAbs(int value);
+
+    [System.Runtime.InteropServices.DllImport("msvcrt.dll", EntryPoint = "strlen")]
+    public static extern int NativeStrLen(string s);
+}
+
+// Generic Variance test classes
+public interface ICovariant<out T>
+{
+    T Get();
+}
+
+public interface IContravariant<in T>
+{
+    void Accept(T item);
+}
+
+public interface IInvariant<T>
+{
+    T Process(T item);
+}
+
+public class CovariantString : ICovariant<string>
+{
+    public string Get() => "hello";
+}
+
+public class ContravariantObject : IContravariant<object>
+{
+    public void Accept(object item) { }
+}
+
+public static class VarianceTest
+{
+    public static ICovariant<string> GetCovariantString() => new CovariantString();
+    public static IContravariant<object> GetContravariantObject() => new ContravariantObject();
+}
+
+// ===== Iterator / IEnumerable test classes =====
+
+// Simple custom enumerator (manual implementation)
+public class SimpleRange : IEnumerable<int>
+{
+    private readonly int _start;
+    private readonly int _count;
+
+    public SimpleRange(int start, int count)
+    {
+        _start = start;
+        _count = count;
+    }
+
+    public IEnumerator<int> GetEnumerator() => new RangeEnumerator(_start, _count);
+
+    IEnumerator IEnumerable.GetEnumerator() => GetEnumerator();
+
+    private class RangeEnumerator : IEnumerator<int>
+    {
+        private readonly int _start;
+        private readonly int _count;
+        private int _index;
+
+        public RangeEnumerator(int start, int count)
+        {
+            _start = start;
+            _count = count;
+            _index = -1;
+        }
+
+        public int Current => _start + _index;
+
+        object IEnumerator.Current => Current;
+
+        public bool MoveNext()
+        {
+            _index++;
+            return _index < _count;
+        }
+
+        public void Reset() { _index = -1; }
+
+        public void Dispose() { }
+    }
+}
+
+// Iterator using yield return
+public static class IteratorHelper
+{
+    public static IEnumerable<int> GetNumbers()
+    {
+        yield return 10;
+        yield return 20;
+        yield return 30;
+    }
+
+    public static IEnumerable<int> CountUp(int start, int count)
+    {
+        for (int i = 0; i < count; i++)
+        {
+            yield return start + i;
+        }
+    }
+
+    public static IEnumerable<string> FilterStrings(string[] items, int minLength)
+    {
+        foreach (var item in items)
+        {
+            if (item.Length >= minLength)
+                yield return item;
+        }
+    }
+}
+
+public static class IteratorTest
+{
+    // foreach over manual IEnumerable<int>
+    public static int SumRange(int start, int count)
+    {
+        var range = new SimpleRange(start, count);
+        int sum = 0;
+        foreach (var n in range)
+        {
+            sum += n;
+        }
+        return sum;
+    }
+
+    // foreach over yield return iterator
+    public static int SumYield()
+    {
+        int sum = 0;
+        foreach (var n in IteratorHelper.GetNumbers())
+        {
+            sum += n;
+        }
+        return sum;
+    }
+
+    // foreach over yield return with parameters
+    public static int SumCountUp()
+    {
+        int sum = 0;
+        foreach (var n in IteratorHelper.CountUp(1, 5))
+        {
+            sum += n;
+        }
+        return sum; // 1+2+3+4+5 = 15
+    }
+
+    // yield return with filtering
+    public static string JoinFiltered()
+    {
+        var items = new string[] { "hi", "hello", "hey", "greetings" };
+        string result = "";
+        foreach (var s in IteratorHelper.FilterStrings(items, 4))
+        {
+            if (result.Length > 0) result = result + ",";
+            result = result + s;
+        }
+        return result; // "hello,greetings"
     }
 }

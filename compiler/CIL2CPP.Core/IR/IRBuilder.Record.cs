@@ -354,7 +354,7 @@ public partial class IRBuilder
             });
         }
 
-        block.Instructions.Add(new IRReturn { Value = $"(cil2cpp::Object*)__clone" });
+        block.Instructions.Add(new IRReturn { Value = $"({type.CppName}*)__clone" });
     }
 
     private void SynthesizeRecordOpEquality(IRMethod method, IRType type, bool isInequality)
@@ -405,13 +405,16 @@ public partial class IRBuilder
 
     private void SynthesizeRecordEqualityContract(IRMethod method, IRType type)
     {
+        // Change return type from System_Type* to void* (System.Type not defined as a struct)
+        method.ReturnTypeCpp = "void*";
+
         var block = new IRBasicBlock { Id = 0 };
         method.BasicBlocks.Clear();
         method.BasicBlocks.Add(block);
         // Return pointer to TypeInfo as a stand-in for System.Type
         block.Instructions.Add(new IRReturn
         {
-            Value = $"(cil2cpp::Object*)&{type.CppName}_TypeInfo"
+            Value = $"(void*)&{type.CppName}_TypeInfo"
         });
     }
 }

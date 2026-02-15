@@ -8,9 +8,11 @@ namespace cil2cpp {
 
 void runtime_init() {
     gc::init();
+    threadpool::init();
 }
 
 void runtime_shutdown() {
+    threadpool::shutdown();
     gc::collect();
     gc::shutdown();
 }

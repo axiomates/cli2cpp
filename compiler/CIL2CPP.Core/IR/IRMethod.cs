@@ -41,8 +41,17 @@ public class IRMethod
     public bool IsGenericInstance { get; set; }
     public bool IsInternalCall { get; set; }
     public bool IsNewSlot { get; set; }
+    public bool IsPInvoke { get; set; }
+    public string? PInvokeModule { get; set; }
+    public string? PInvokeEntryPoint { get; set; }
     public string? OperatorName { get; set; }
     public int VTableSlot { get; set; } = -1;
+
+    /// <summary>Raw ECMA-335 MethodAttributes value (II.23.1.10)</summary>
+    public uint Attributes { get; set; }
+
+    /// <summary>Custom attributes applied to this method</summary>
+    public List<IRCustomAttribute> CustomAttributes { get; } = new();
 
     /// <summary>
     /// Explicit interface overrides (from Cecil's .override directive).
@@ -94,6 +103,10 @@ public class IRLocal
     public string CppName { get; set; } = "";
     public IRType? LocalType { get; set; }
     public string CppTypeName { get; set; } = "";
+    /// <summary>
+    /// Pinned local (fixed statement). BoehmGC is conservative so pinning is a no-op.
+    /// </summary>
+    public bool IsPinned { get; set; }
 }
 
 /// <summary>

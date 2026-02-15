@@ -11,6 +11,37 @@ public static class CppNameMapper
     public static void RegisterValueType(string ilTypeName) => _userValueTypes.Add(ilTypeName);
     public static void ClearValueTypes() => _userValueTypes.Clear();
 
+    /// <summary>
+    /// Maps BCL exception IL type names to runtime C++ type names.
+    /// These types are defined in the runtime (exception.h), not in generated code.
+    /// </summary>
+    private static readonly Dictionary<string, string> RuntimeExceptionTypeMap = new()
+    {
+        ["System.Exception"] = "cil2cpp::Exception",
+        ["System.NullReferenceException"] = "cil2cpp::NullReferenceException",
+        ["System.IndexOutOfRangeException"] = "cil2cpp::IndexOutOfRangeException",
+        ["System.InvalidCastException"] = "cil2cpp::InvalidCastException",
+        ["System.InvalidOperationException"] = "cil2cpp::InvalidOperationException",
+        ["System.ArgumentException"] = "cil2cpp::ArgumentException",
+        ["System.ArgumentNullException"] = "cil2cpp::ArgumentNullException",
+        ["System.OverflowException"] = "cil2cpp::OverflowException",
+        ["System.ArithmeticException"] = "cil2cpp::OverflowException",
+        ["System.NotSupportedException"] = "cil2cpp::InvalidOperationException",
+        ["System.NotImplementedException"] = "cil2cpp::InvalidOperationException",
+    };
+
+    /// <summary>
+    /// Check if a type name is a BCL exception type provided by the runtime.
+    /// </summary>
+    public static bool IsRuntimeExceptionType(string ilTypeName)
+        => RuntimeExceptionTypeMap.ContainsKey(ilTypeName);
+
+    /// <summary>
+    /// Get the runtime C++ name for a BCL exception type, or null if not a runtime exception.
+    /// </summary>
+    public static string? GetRuntimeExceptionCppName(string ilTypeName)
+        => RuntimeExceptionTypeMap.TryGetValue(ilTypeName, out var name) ? name : null;
+
     private static readonly Dictionary<string, string> PrimitiveTypeMap = new()
     {
         ["System.Void"] = "void",
@@ -60,6 +91,11 @@ public static class CppNameMapper
     /// </summary>
     public static string GetCppTypeName(string ilTypeName, bool isPointer = false)
     {
+        // Strip modreq/modopt (e.g. "System.Void modreq(IsExternalInit)" → "System.Void")
+        var modIdx = ilTypeName.IndexOf(" modreq(", StringComparison.Ordinal);
+        if (modIdx < 0) modIdx = ilTypeName.IndexOf(" modopt(", StringComparison.Ordinal);
+        if (modIdx >= 0) ilTypeName = ilTypeName[..modIdx];
+
         // Handle pointer/ref types
         if (ilTypeName.EndsWith("&"))
         {
@@ -73,10 +109,15 @@ public static class CppNameMapper
             return GetCppTypeName(baseType) + "*";
         }
 
-        // Handle array types
+        // Handle array types (single-dim and multi-dim)
         if (ilTypeName.EndsWith("[]"))
         {
             return "cil2cpp::Array*";
+        }
+        // Multi-dimensional arrays: T[0...,0...] or T[,] → MdArray*
+        if (ilTypeName.Contains("[") && (ilTypeName.Contains(",") || ilTypeName.Contains("...")))
+        {
+            return "cil2cpp::MdArray*";
         }
 
         // Primitive types
@@ -109,6 +150,11 @@ public static class CppNameMapper
     /// </summary>
     public static string GetCppTypeForDecl(string ilTypeName)
     {
+        // Strip modreq/modopt early (e.g. init-only setters: "System.Void modreq(IsExternalInit)")
+        var modIdx = ilTypeName.IndexOf(" modreq(", StringComparison.Ordinal);
+        if (modIdx < 0) modIdx = ilTypeName.IndexOf(" modopt(", StringComparison.Ordinal);
+        if (modIdx >= 0) ilTypeName = ilTypeName[..modIdx];
+
         if (ilTypeName == "System.Void") return "void";
 
         if (IsValueType(ilTypeName))
@@ -125,6 +171,10 @@ public static class CppNameMapper
     /// </summary>
     public static string MangleTypeName(string ilFullName)
     {
+        // Map BCL exception types to runtime C++ names
+        if (RuntimeExceptionTypeMap.TryGetValue(ilFullName, out var runtimeName))
+            return runtimeName;
+
         return ilFullName
             .Replace(".", "_")
             .Replace("/", "_")  // Nested types
@@ -186,6 +236,14 @@ public static class CppNameMapper
 
         // Prefix with f_ to avoid C++ keyword conflicts
         return $"f_{name}";
+    }
+
+    /// <summary>
+    /// Mangle an arbitrary identifier (parameter name, local name) into a valid C++ identifier.
+    /// </summary>
+    public static string MangleIdentifier(string name)
+    {
+        return name.Replace("<", "_").Replace(">", "_").Replace(".", "_");
     }
 
     /// <summary>

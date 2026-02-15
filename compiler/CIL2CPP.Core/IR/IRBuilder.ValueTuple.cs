@@ -218,13 +218,27 @@ public partial class IRBuilder
                     return true;
                 }
 
-                // Unbox the argument to the same tuple type, then compare field by field
+                // Determine if the argument needs unboxing (Object parameter) or is already typed
                 var tupleCpp = GetMangledTypeNameForRef(methodRef.DeclaringType);
+                var paramType = methodRef.Parameters.Count > 0 ? methodRef.Parameters[0].ParameterType : null;
+                var paramIsObject = paramType?.FullName is "System.Object" or null;
                 var unboxed = $"__t{tempCounter++}";
-                block.Instructions.Add(new IRRawCpp
+                if (paramIsObject)
                 {
-                    Code = $"auto {unboxed} = cil2cpp::unbox<{tupleCpp}>({arg});"
-                });
+                    // Equals(object other) — needs unbox from Object* to value type
+                    block.Instructions.Add(new IRRawCpp
+                    {
+                        Code = $"auto {unboxed} = cil2cpp::unbox<{tupleCpp}>({arg});"
+                    });
+                }
+                else
+                {
+                    // Equals(ValueTuple other) — already the correct value type
+                    block.Instructions.Add(new IRRawCpp
+                    {
+                        Code = $"auto {unboxed} = {arg};"
+                    });
+                }
 
                 // Build: field1==field1 && field2==field2 && ...
                 var conditions = new List<string>();
@@ -259,9 +273,11 @@ public partial class IRBuilder
                 }
 
                 // hash = ((hash * 31) + field_hash) for each field
+                // Use a helper var with unique name to avoid auto-declaration conflicts
+                var hashVar = $"__hash{tempCounter++}";
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"int32_t {tmp} = 0;"
+                    Code = $"int32_t {hashVar} = 0;"
                 });
                 int fieldCount = Math.Min(typeArgs.Count, 7);
                 for (int i = 0; i < fieldCount; i++)
@@ -269,9 +285,13 @@ public partial class IRBuilder
                     var fieldHash = EmitFieldHash($"{thisArg}->{GetTupleFieldName(i)}", typeArgs[i]);
                     block.Instructions.Add(new IRRawCpp
                     {
-                        Code = $"{tmp} = {tmp} * 31 + {fieldHash};"
+                        Code = $"{hashVar} = {hashVar} * 31 + {fieldHash};"
                     });
                 }
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"{tmp} = {hashVar};"
+                });
                 stack.Push(tmp);
                 return true;
             }

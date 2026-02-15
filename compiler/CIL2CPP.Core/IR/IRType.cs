@@ -3,6 +3,16 @@ using CIL2CPP.Core.IL;
 namespace CIL2CPP.Core.IR;
 
 /// <summary>
+/// Generic parameter variance (ECMA-335 II.9.11).
+/// </summary>
+public enum GenericVariance : byte
+{
+    Invariant = 0,
+    Covariant = 1,      // out T — only in return positions
+    Contravariant = 2,  // in T — only in parameter positions
+}
+
+/// <summary>
 /// Represents a type in the IR.
 /// </summary>
 public class IRType
@@ -57,6 +67,12 @@ public class IRType
     /// <summary>Concrete type argument names for generic instances (e.g., ["System.Int32"])</summary>
     public List<string> GenericArguments { get; set; } = new();
 
+    /// <summary>Generic parameter variances for open generic types (Covariant, Contravariant, Invariant).</summary>
+    public List<GenericVariance> GenericParameterVariances { get; } = new();
+
+    /// <summary>For generic instances: the open generic type's CppName (e.g., "System_IEnumerable_1").</summary>
+    public string? GenericDefinitionCppName { get; set; }
+
     /// <summary>Underlying integer type for enums (e.g., "System.Int32")</summary>
     public string? EnumUnderlyingType { get; set; }
 
@@ -71,6 +87,9 @@ public class IRType
     /// These types should not emit struct/method definitions in generated code.
     /// </summary>
     public bool IsRuntimeProvided { get; set; }
+
+    /// <summary>Custom attributes applied to this type</summary>
+    public List<IRCustomAttribute> CustomAttributes { get; } = new();
 
     /// <summary>
     /// Get the C++ type name for use in declarations.
@@ -98,6 +117,12 @@ public class IRField
     public int Offset { get; set; }
     public IRType? DeclaringType { get; set; }
     public object? ConstantValue { get; set; }
+
+    /// <summary>Raw ECMA-335 FieldAttributes value (II.23.1.5)</summary>
+    public uint Attributes { get; set; }
+
+    /// <summary>Custom attributes applied to this field</summary>
+    public List<IRCustomAttribute> CustomAttributes { get; } = new();
 }
 
 /// <summary>

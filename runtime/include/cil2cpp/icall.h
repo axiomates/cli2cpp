@@ -20,6 +20,7 @@ String* Environment_get_NewLine();
 Int32 Environment_get_TickCount();
 Int64 Environment_get_TickCount64();
 Int32 Environment_get_ProcessorCount();
+Int32 Environment_get_CurrentManagedThreadId();
 
 // System.Buffer
 void Buffer_Memmove(void* dest, void* src, UInt64 len);
@@ -30,9 +31,11 @@ Object* Type_GetTypeFromHandle(void* handle);
 
 // System.Threading.Monitor
 void Monitor_Enter(Object* obj);
+void Monitor_Enter2(Object* obj, bool* lockTaken);
 void Monitor_Exit(Object* obj);
 void Monitor_ReliableEnter(Object* obj, bool* lockTaken);
 bool Monitor_Wait(Object* obj, Int32 timeout_ms);
+inline bool Monitor_Wait(Object* obj) { return Monitor_Wait(obj, -1); }
 void Monitor_Pulse(Object* obj);
 void Monitor_PulseAll(Object* obj);
 
@@ -48,6 +51,12 @@ Int64 Interlocked_Exchange_i64(Int64* location, Int64 value);
 Int64 Interlocked_CompareExchange_i64(Int64* location, Int64 value, Int64 comparand);
 Object* Interlocked_Exchange_obj(Object** location, Object* value);
 Object* Interlocked_CompareExchange_obj(Object** location, Object* value, Object* comparand);
+
+// System.ArgumentNullException
+void ArgumentNullException_ThrowIfNull(Object* arg, String* paramName);
+
+// System.ThrowHelper (BCL internal)
+void ThrowHelper_ThrowArgumentException(Int32 resource);
 
 // System.Threading.Thread
 void Thread_Sleep(Int32 milliseconds);

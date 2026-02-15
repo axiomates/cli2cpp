@@ -80,11 +80,20 @@ public partial class CppCodeGenerator
         }
 
         // Primitive type TypeInfo definitions (for array element types)
+        // Runtime-provided reference types get aliases to runtime TypeInfo instead of new definitions.
         if (_module.PrimitiveTypeInfos.Count > 0)
         {
             sb.AppendLine("// ===== Primitive Type Info (array element types) =====");
             foreach (var entry in _module.PrimitiveTypeInfos.Values)
             {
+                // Runtime-provided reference types: alias to runtime's TypeInfo
+                var runtimeAlias = GetRuntimeTypeInfoAlias(entry.ILFullName);
+                if (runtimeAlias != null)
+                {
+                    sb.AppendLine($"cil2cpp::TypeInfo& {entry.CppMangledName}_TypeInfo = {runtimeAlias};");
+                    continue;
+                }
+
                 sb.AppendLine($"cil2cpp::TypeInfo {entry.CppMangledName}_TypeInfo = {{");
                 sb.AppendLine($"    .name = \"{entry.ILFullName.Split('.').Last()}\",");
                 sb.AppendLine($"    .namespace_name = \"{entry.ILFullName[..entry.ILFullName.LastIndexOf('.')]}\",");
@@ -94,7 +103,8 @@ public partial class CppCodeGenerator
                 sb.AppendLine($"    .interface_count = 0,");
                 sb.AppendLine($"    .instance_size = sizeof({entry.CppTypeName}),");
                 sb.AppendLine($"    .element_size = sizeof({entry.CppTypeName}),");
-                sb.AppendLine($"    .flags = cil2cpp::TypeFlags::ValueType,");
+                // Primitive types get both ValueType and Primitive flags (ECMA-335)
+                sb.AppendLine($"    .flags = cil2cpp::TypeFlags::ValueType | cil2cpp::TypeFlags::Primitive,");
                 sb.AppendLine($"    .vtable = nullptr,");
                 sb.AppendLine($"    .fields = nullptr,");
                 sb.AppendLine($"    .field_count = 0,");
@@ -104,6 +114,8 @@ public partial class CppCodeGenerator
                 sb.AppendLine($"    .finalizer = nullptr,");
                 sb.AppendLine($"    .interface_vtables = nullptr,");
                 sb.AppendLine($"    .interface_vtable_count = 0,");
+                sb.AppendLine($"    .custom_attributes = nullptr,");
+                sb.AppendLine($"    .custom_attribute_count = 0,");
                 sb.AppendLine($"}};");
             }
             sb.AppendLine();
@@ -118,11 +130,19 @@ public partial class CppCodeGenerator
         // Finalizer wrappers
         EmitFinalizerWrappers(sb, userTypes);
 
+        // Reflection metadata (FieldInfo/MethodInfo arrays)
+        EmitReflectionMetadata(sb, userTypes);
+
+        // Generic variance data arrays (for variance-aware type checking)
+        EmitGenericVarianceData(sb, userTypes);
+
         // Type info definitions (skip runtime-provided types — already defined in runtime)
         sb.AppendLine("// ===== Type Info =====");
+        var emittedTypeInfo = new HashSet<string>();
         foreach (var type in userTypes)
         {
             if (type.IsRuntimeProvided) continue;
+            if (!emittedTypeInfo.Add(type.CppName)) continue;
             GenerateTypeInfo(sb, type);
         }
         sb.AppendLine();
@@ -148,15 +168,38 @@ public partial class CppCodeGenerator
             }
         }
 
+        // P/Invoke extern declarations and wrappers
+        EmitPInvokeDeclarations(sb, userTypes);
+
+        // Build known type set (same as header — used to filter methods with unknown param types)
+        var knownTypeNames = new HashSet<string>();
+        foreach (var t in userTypes)
+        {
+            knownTypeNames.Add(t.CppName);
+        }
+
         // Method implementations (skip runtime-provided types and InternalCall methods)
         sb.AppendLine("// ===== Method Implementations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsDelegate || type.IsRuntimeProvided) continue;
+            if (type.IsDelegate || type.IsRuntimeProvided) continue;
+
+            // For interfaces, only emit DIM method bodies (non-abstract with converted bodies)
+            if (type.IsInterface)
+            {
+                foreach (var method in type.Methods)
+                {
+                    if (method.IsAbstract || method.BasicBlocks.Count == 0) continue;
+                    GenerateMethodImpl(sb, method);
+                }
+                continue;
+            }
 
             foreach (var method in type.Methods)
             {
-                if (method.IsAbstract || method.IsInternalCall) continue;
+                if (method.IsAbstract || method.IsInternalCall || method.IsPInvoke) continue;
+                if (method.BasicBlocks.Count == 0) continue;
+                if (HasUnknownParameterTypes(method, knownTypeNames)) continue;
                 GenerateMethodImpl(sb, method);
             }
         }
@@ -172,14 +215,16 @@ public partial class CppCodeGenerator
     {
         var baseName = type.BaseType != null ? $"&{type.BaseType.CppName}_TypeInfo" : "nullptr";
 
-        // Interfaces array
-        var interfacesExpr = type.Interfaces.Count > 0 ? $"{type.CppName}_interfaces" : "nullptr";
+        // Interfaces array (EmitInterfaceData skips interfaces themselves, so null for them)
+        var interfacesExpr = (!type.IsInterface && type.Interfaces.Count > 0) ? $"{type.CppName}_interfaces" : "nullptr";
+        var interfaceCount = type.IsInterface ? 0 : type.Interfaces.Count;
 
         // VTable (delegates have no vtable)
         var vtableExpr = (!type.IsInterface && !type.IsDelegate && type.VTable.Count > 0) ? $"&{type.CppName}_VTable" : "nullptr";
 
-        // Interface vtables
-        var ifaceVtablesExpr = type.InterfaceImpls.Count > 0 ? $"{type.CppName}_interface_vtables" : "nullptr";
+        // Interface vtables (also skipped for interfaces)
+        var ifaceVtablesExpr = (!type.IsInterface && type.InterfaceImpls.Count > 0) ? $"{type.CppName}_interface_vtables" : "nullptr";
+        var ifaceVtableCount = type.IsInterface ? 0 : type.InterfaceImpls.Count;
 
         // Finalizer
         var finalizerExpr = type.Finalizer != null ? $"{type.CppName}_finalizer_wrapper" : "nullptr";
@@ -202,19 +247,46 @@ public partial class CppCodeGenerator
         sb.AppendLine($"    .full_name = \"{type.ILFullName}\",");
         sb.AppendLine($"    .base_type = {baseName},");
         sb.AppendLine($"    .interfaces = {interfacesExpr},");
-        sb.AppendLine($"    .interface_count = {type.Interfaces.Count},");
+        sb.AppendLine($"    .interface_count = {interfaceCount},");
         sb.AppendLine($"    .instance_size = {instanceSize},");
         sb.AppendLine($"    .element_size = 0,");
         sb.AppendLine($"    .flags = {flagsStr},");
         sb.AppendLine($"    .vtable = {vtableExpr},");
-        sb.AppendLine($"    .fields = nullptr,");
-        sb.AppendLine($"    .field_count = 0,");
-        sb.AppendLine($"    .methods = nullptr,");
-        sb.AppendLine($"    .method_count = 0,");
+        // Reflection metadata: FieldInfo/MethodInfo arrays
+        // Enums and delegates skip EmitReflectionMetadata, so always use nullptr for them
+        var allFields = type.Fields.Concat(type.StaticFields).ToList();
+        var reflectableMethods = type.Methods.Where(m => !CppNameMapper.IsCompilerGeneratedType(m.Name)).ToList();
+        var skipReflection = type.IsEnum || type.IsDelegate || type.IsRuntimeProvided;
+        var fieldsExpr = (!skipReflection && allFields.Count > 0) ? $"{type.CppName}_fields" : "nullptr";
+        var methodsExpr = (!skipReflection && reflectableMethods.Count > 0) ? $"{type.CppName}_methods" : "nullptr";
+        if (skipReflection) { allFields = new(); reflectableMethods = new(); }
+        sb.AppendLine($"    .fields = {fieldsExpr},");
+        sb.AppendLine($"    .field_count = {allFields.Count},");
+        sb.AppendLine($"    .methods = {methodsExpr},");
+        sb.AppendLine($"    .method_count = {reflectableMethods.Count},");
         sb.AppendLine($"    .default_ctor = nullptr,");
         sb.AppendLine($"    .finalizer = {finalizerExpr},");
         sb.AppendLine($"    .interface_vtables = {ifaceVtablesExpr},");
-        sb.AppendLine($"    .interface_vtable_count = {type.InterfaceImpls.Count},");
+        sb.AppendLine($"    .interface_vtable_count = {ifaceVtableCount},");
+        // Custom attributes
+        var typeAttrsExpr = type.CustomAttributes.Count > 0
+            ? $"{type.CppName}_custom_attrs" : "nullptr";
+        sb.AppendLine($"    .custom_attributes = {typeAttrsExpr},");
+        sb.AppendLine($"    .custom_attribute_count = {type.CustomAttributes.Count},");
+        // Generic variance data (must match EmitGenericVarianceData filter)
+        var typeInfoLookup = BuildTypeInfoExprLookup();
+        var hasGenericArgs = type.IsGenericInstance && type.GenericArguments.Count > 0
+                             && type.GenericParameterVariances.Count > 0
+                             && type.GenericArguments.All(arg => typeInfoLookup.ContainsKey(arg));
+        var genArgsExpr = hasGenericArgs ? $"{type.CppName}_generic_args" : "nullptr";
+        var genVarExpr = hasGenericArgs ? $"{type.CppName}_generic_variances" : "nullptr";
+        var genCount = hasGenericArgs ? type.GenericArguments.Count : 0;
+        var genDefName = type.GenericDefinitionCppName != null
+            ? $"\"{type.GenericDefinitionCppName}\"" : "nullptr";
+        sb.AppendLine($"    .generic_arguments = {genArgsExpr},");
+        sb.AppendLine($"    .generic_variances = {genVarExpr},");
+        sb.AppendLine($"    .generic_argument_count = {genCount},");
+        sb.AppendLine($"    .generic_definition_name = {genDefName},");
         sb.AppendLine("};");
     }
 
@@ -237,17 +309,34 @@ public partial class CppCodeGenerator
         // Check if method has any labels (branch targets)
         var allInstructions = method.BasicBlocks.SelectMany(b => b.Instructions).ToList();
         bool hasLabels = allInstructions.Any(i => i is IRLabel);
+
+        // Pre-declare temp variables used across label scopes
+        // (variables declared inside one { } label scope can't be used in another)
+        if (hasLabels)
+        {
+            var crossScopeVars = FindCrossScopeVariables(allInstructions);
+            foreach (var varName in crossScopeVars)
+            {
+                sb.AppendLine($"    cil2cpp::Object* {varName} = nullptr;");
+                declaredTemps.Add(varName);
+            }
+        }
         bool inLabelScope = false;
+        bool gotoScopeOpen = false;
 
         // Emit basic blocks
         foreach (var block in method.BasicBlocks)
         {
             foreach (var instr in block.Instructions)
             {
-                // When entering a label, close previous scope and open new one
-                // This prevents goto from crossing auto declarations (C++ error C2362)
+                // When entering a label, close goto scope and label scope
                 if (hasLabels && instr is IRLabel)
                 {
+                    if (gotoScopeOpen)
+                    {
+                        sb.AppendLine("    }");
+                        gotoScopeOpen = false;
+                    }
                     if (inLabelScope)
                         sb.AppendLine("    }");
                     // Emit the label at function scope
@@ -255,6 +344,22 @@ public partial class CppCodeGenerator
                     sb.AppendLine("    {");
                     inLabelScope = true;
                     continue;
+                }
+
+                // Exception handling instructions must be at function scope
+                // (CIL2CPP_TRY/CATCH/FINALLY/END_TRY macros expand to { if / } else if / } })
+                if (instr is IRTryBegin or IRCatchBegin or IRFinallyBegin or IRTryEnd)
+                {
+                    if (gotoScopeOpen)
+                    {
+                        sb.AppendLine("    }");
+                        gotoScopeOpen = false;
+                    }
+                    if (inLabelScope)
+                    {
+                        sb.AppendLine("    }");
+                        inLabelScope = false;
+                    }
                 }
 
                 // Emit IL offset comment in Debug mode
@@ -287,11 +392,23 @@ public partial class CppCodeGenerator
                 // For instructions that assign to temp vars, add 'auto' on first use
                 code = AddAutoDeclarations(code, declaredTemps);
 
-                var indent = inLabelScope ? "        " : "    ";
+                var indent = (inLabelScope || gotoScopeOpen) ? "        " : "    ";
                 sb.AppendLine($"{indent}{code}");
+
+                // After a conditional/unconditional branch in the outer scope,
+                // open a scope to prevent goto from crossing auto declarations (C++ C2362)
+                if (hasLabels && !inLabelScope && !gotoScopeOpen
+                    && (instr is IRConditionalBranch || instr is IRBranch))
+                {
+                    sb.AppendLine("    {");
+                    gotoScopeOpen = true;
+                }
             }
         }
 
+        // Close last goto scope
+        if (gotoScopeOpen)
+            sb.AppendLine("    }");
         // Close last label scope
         if (inLabelScope)
             sb.AppendLine("    }");
@@ -312,6 +429,58 @@ public partial class CppCodeGenerator
 
         sb.AppendLine("}");
         sb.AppendLine();
+    }
+
+    /// <summary>
+    /// Find temp variables that are referenced across multiple label scopes.
+    /// These must be pre-declared at function scope to avoid C++ scoping issues.
+    /// </summary>
+    private static HashSet<string> FindCrossScopeVariables(List<IRInstruction> instructions)
+    {
+        var result = new HashSet<string>();
+        // Track which scope each variable is first assigned/used in
+        // scope 0 = function scope, incrementing for each IRLabel
+        int currentScope = 0;
+        var varFirstScope = new Dictionary<string, int>();
+
+        foreach (var instr in instructions)
+        {
+            if (instr is IRLabel)
+            {
+                currentScope++;
+                continue;
+            }
+
+            var code = instr.ToCpp();
+            // Find all __tN references in the code
+            for (int i = 0; i < code.Length - 3; i++)
+            {
+                if (code[i] == '_' && code[i + 1] == '_' && code[i + 2] == 't'
+                    && i + 3 < code.Length && char.IsDigit(code[i + 3]))
+                {
+                    // Check we're not inside __this, __type_info, etc.
+                    if (i > 0 && char.IsLetterOrDigit(code[i - 1])) continue;
+
+                    // Extract full variable name __tN
+                    int end = i + 3;
+                    while (end < code.Length && char.IsDigit(code[end])) end++;
+                    // Make sure it's not followed by more identifier chars
+                    if (end < code.Length && (char.IsLetter(code[end]) || code[end] == '_')) continue;
+
+                    var varName = code[i..end];
+                    if (varFirstScope.TryGetValue(varName, out var firstScope))
+                    {
+                        if (firstScope != currentScope)
+                            result.Add(varName);
+                    }
+                    else
+                    {
+                        varFirstScope[varName] = currentScope;
+                    }
+                }
+            }
+        }
+        return result;
     }
 
     /// <summary>
@@ -340,6 +509,72 @@ public partial class CppCodeGenerator
         return code;
     }
 
+    /// <summary>
+    /// For runtime-provided reference types (System.String, System.Object), return the
+    /// qualified name of the runtime's TypeInfo so we can alias to it instead of emitting a new one.
+    /// Returns null for types that should get their own generated TypeInfo.
+    /// </summary>
+    private static string? GetRuntimeTypeInfoAlias(string ilFullName) => ilFullName switch
+    {
+        "System.String" => "cil2cpp::System::String_TypeInfo",
+        "System.Object" => "cil2cpp::System::Object_TypeInfo",
+        _ => null,
+    };
+
+    /// <summary>
+    /// Generate a typed function pointer cast expression for a method, to resolve overload ambiguity.
+    /// E.g., (void*)(void(*)(Foo*, int32_t))&Foo_Bar
+    /// </summary>
+    private string GetTypedMethodPointerCast(IRMethod method)
+    {
+        if (method.IsAbstract || method.BasicBlocks.Count == 0)
+            return "nullptr";
+
+        var retType = SafeCppType(method.ReturnTypeCpp ?? "void");
+        var paramTypes = new List<string>();
+        // Instance methods have implicit 'this' parameter
+        if (!method.IsStatic && method.DeclaringType != null)
+        {
+            paramTypes.Add($"{method.DeclaringType.CppName}*");
+        }
+        foreach (var p in method.Parameters)
+            paramTypes.Add(SafeCppType(p.CppTypeName));
+
+        var funcPtrType = $"{retType}(*)({string.Join(", ", paramTypes)})";
+        return $"(void*)({funcPtrType})&{method.CppName}";
+    }
+
+    /// <summary>
+    /// Replace pointer-to-unknown-struct types with void* for safe function pointer casts.
+    /// Types not defined in the compilation unit (BCL types like System_Type*) cause C++ errors.
+    /// </summary>
+    private string SafeCppType(string cppType)
+    {
+        if (cppType.EndsWith("*"))
+        {
+            var baseType = cppType.TrimEnd('*').Trim();
+            if (baseType.StartsWith("cil2cpp::") || IsCppPrimitiveType(baseType))
+                return cppType;
+            // Check if the struct type is defined in the compilation unit
+            if (_knownStructTypes == null) BuildKnownStructTypes();
+            if (!_knownStructTypes!.Contains(baseType))
+                return "void*";
+        }
+        return cppType;
+    }
+
+    private HashSet<string>? _knownStructTypes;
+    private void BuildKnownStructTypes()
+    {
+        _knownStructTypes = new HashSet<string>();
+        foreach (var type in _module.Types)
+        {
+            if (CppNameMapper.IsCompilerGeneratedType(type.ILFullName)) continue;
+            if (type.IsInterface && type.Fields.Count == 0) continue;
+            _knownStructTypes.Add(type.CppName);
+        }
+    }
+
     private void EmitVTableData(StringBuilder sb, List<IRType> userTypes)
     {
         bool any = false;
@@ -355,7 +590,8 @@ public partial class CppCodeGenerator
             // Method pointer array (null Method = System.Object base virtual, use BCL fallback)
             var methods = string.Join(", ", type.VTable.Select(e =>
             {
-                if (e.Method != null && !e.Method.IsAbstract) return $"(void*){e.Method.CppName}";
+                if (e.Method != null && !e.Method.IsAbstract)
+                    return GetTypedMethodPointerCast(e.Method);
                 return ObjectMethodFallbacks.GetValueOrDefault(e.MethodName, "nullptr");
             }));
             sb.AppendLine($"static void* {type.CppName}_vtable_methods[] = {{ {methods} }};");
@@ -388,7 +624,8 @@ public partial class CppCodeGenerator
 
             foreach (var impl in type.InterfaceImpls)
             {
-                var methods = string.Join(", ", impl.MethodImpls.Select(m => m != null ? $"(void*){m.CppName}" : "nullptr"));
+                var methods = string.Join(", ", impl.MethodImpls.Select(m =>
+                    m != null ? GetTypedMethodPointerCast(m) : "nullptr"));
                 sb.AppendLine($"static void* {type.CppName}_iface_{impl.Interface.CppName}_methods[] = {{ {methods} }};");
             }
 
@@ -397,6 +634,38 @@ public partial class CppCodeGenerator
             sb.AppendLine($"static cil2cpp::InterfaceVTable {type.CppName}_interface_vtables[] = {{");
             sb.AppendLine($"    {string.Join(",\n    ", entries)}");
             sb.AppendLine("};");
+        }
+        if (any) sb.AppendLine();
+    }
+
+    private void EmitGenericVarianceData(StringBuilder sb, List<IRType> userTypes)
+    {
+        var typeInfoLookup = BuildTypeInfoExprLookup();
+        bool any = false;
+        foreach (var type in userTypes)
+        {
+            if (type.IsRuntimeProvided) continue;
+            if (!type.IsGenericInstance || type.GenericArguments.Count == 0
+                || type.GenericParameterVariances.Count == 0) continue;
+
+            // Verify all generic arguments have TypeInfo available
+            bool allArgsResolvable = type.GenericArguments.All(arg =>
+                typeInfoLookup.ContainsKey(arg));
+            if (!allArgsResolvable) continue;
+
+            if (!any)
+            {
+                sb.AppendLine("// ===== Generic Variance Data =====");
+                any = true;
+            }
+
+            // Emit TypeInfo pointer array for generic arguments
+            var argRefs = type.GenericArguments.Select(arg => typeInfoLookup[arg]);
+            sb.AppendLine($"static cil2cpp::TypeInfo* {type.CppName}_generic_args[] = {{ {string.Join(", ", argRefs)} }};");
+
+            // Emit variance array
+            var variances = type.GenericParameterVariances.Select(v => ((byte)v).ToString());
+            sb.AppendLine($"static uint8_t {type.CppName}_generic_variances[] = {{ {string.Join(", ", variances)} }};");
         }
         if (any) sb.AppendLine();
     }
@@ -419,4 +688,331 @@ public partial class CppCodeGenerator
         }
         if (any) sb.AppendLine();
     }
+
+    /// <summary>
+    /// Build a lookup table mapping IL type full names to TypeInfo pointer expressions.
+    /// Only includes types with TypeInfo emitted in generated code (non-runtime-provided user types + primitives).
+    /// </summary>
+    private Dictionary<string, string> BuildTypeInfoExprLookup()
+    {
+        var lookup = new Dictionary<string, string>();
+
+        // User types that are not runtime-provided
+        foreach (var type in _module.Types)
+        {
+            if (!type.IsRuntimeProvided && !CppNameMapper.IsCompilerGeneratedType(type.ILFullName))
+            {
+                lookup[type.ILFullName] = $"&{type.CppName}_TypeInfo";
+            }
+        }
+
+        // Primitive types (array element types)
+        foreach (var entry in _module.PrimitiveTypeInfos.Values)
+        {
+            lookup[entry.ILFullName] = $"&{entry.CppMangledName}_TypeInfo";
+        }
+
+        return lookup;
+    }
+
+    private void EmitReflectionMetadata(StringBuilder sb, List<IRType> userTypes)
+    {
+        var typeInfoLookup = BuildTypeInfoExprLookup();
+        bool any = false;
+        var emittedReflection = new HashSet<string>();
+
+        foreach (var type in userTypes)
+        {
+            if (type.IsRuntimeProvided || type.IsEnum || type.IsDelegate) continue;
+            // Deduplicate — BCL proxies may appear multiple times
+            if (!emittedReflection.Add(type.CppName)) continue;
+
+            var allFields = type.Fields.Concat(type.StaticFields).ToList();
+            var reflectableMethods = type.Methods
+                .Where(m => !CppNameMapper.IsCompilerGeneratedType(m.Name))
+                .ToList();
+
+            if (allFields.Count == 0 && reflectableMethods.Count == 0) continue;
+
+            if (!any)
+            {
+                sb.AppendLine("// ===== Reflection Metadata =====");
+                any = true;
+            }
+
+            // Emit custom attribute arrays for type, fields, and methods
+            EmitCustomAttributeArrays(sb, type, allFields, reflectableMethods);
+
+            // Emit FieldInfo array
+            if (allFields.Count > 0)
+            {
+                sb.AppendLine($"static cil2cpp::FieldInfo {type.CppName}_fields[] = {{");
+                foreach (var field in allFields)
+                {
+                    var fieldTypeExpr = typeInfoLookup.GetValueOrDefault(field.FieldTypeName, "nullptr");
+                    var offsetExpr = field.IsStatic ? "0" : $"offsetof({type.CppName}, {field.CppName})";
+                    var fieldAttrsExpr = field.CustomAttributes.Count > 0
+                        ? $"{type.CppName}_{field.CppName}_attrs" : "nullptr";
+                    sb.AppendLine($"    {{ .name = \"{field.Name}\", " +
+                        $".declaring_type = &{type.CppName}_TypeInfo, " +
+                        $".field_type = {fieldTypeExpr}, " +
+                        $".offset = {offsetExpr}, " +
+                        $".flags = 0x{field.Attributes:X4}, " +
+                        $".custom_attributes = {fieldAttrsExpr}, " +
+                        $".custom_attribute_count = {field.CustomAttributes.Count} }},");
+                }
+                sb.AppendLine("};");
+            }
+
+            // Emit MethodInfo parameter type arrays and MethodInfo array
+            if (reflectableMethods.Count > 0)
+            {
+                // First: parameter type arrays for methods that have parameters
+                // Use index suffix to disambiguate overloaded methods with same CppName
+                for (int mi = 0; mi < reflectableMethods.Count; mi++)
+                {
+                    var method = reflectableMethods[mi];
+                    if (method.Parameters.Count == 0) continue;
+                    var paramTypeExprs = method.Parameters
+                        .Select(p => typeInfoLookup.GetValueOrDefault(p.ILTypeName, "nullptr"))
+                        .ToList();
+                    sb.AppendLine($"static cil2cpp::TypeInfo* {type.CppName}_m{mi}_param_types[] = {{ {string.Join(", ", paramTypeExprs)} }};");
+                }
+
+                // Second: MethodInfo array
+                sb.AppendLine($"static cil2cpp::MethodInfo {type.CppName}_methods[] = {{");
+                for (int mi = 0; mi < reflectableMethods.Count; mi++)
+                {
+                    var method = reflectableMethods[mi];
+                    var returnTypeExpr = typeInfoLookup.GetValueOrDefault(
+                        method.ReturnType?.ILFullName ?? "", "nullptr");
+                    var paramTypesExpr = method.Parameters.Count > 0
+                        ? $"{type.CppName}_m{mi}_param_types" : "nullptr";
+                    var methodPtrExpr = (!method.IsAbstract && !method.IsInternalCall
+                            && method.BasicBlocks.Count > 0)
+                        ? GetTypedMethodPointerCast(method)
+                        : "nullptr";
+                    var methodAttrsExpr = method.CustomAttributes.Count > 0
+                        ? $"{method.CppName}_attrs" : "nullptr";
+
+                    sb.AppendLine($"    {{ .name = \"{method.Name}\", " +
+                        $".declaring_type = &{type.CppName}_TypeInfo, " +
+                        $".return_type = {returnTypeExpr}, " +
+                        $".parameter_types = {paramTypesExpr}, " +
+                        $".parameter_count = {method.Parameters.Count}, " +
+                        $".method_pointer = {methodPtrExpr}, " +
+                        $".flags = 0x{method.Attributes:X4}, " +
+                        $".vtable_slot = {method.VTableSlot}, " +
+                        $".custom_attributes = {methodAttrsExpr}, " +
+                        $".custom_attribute_count = {method.CustomAttributes.Count} }},");
+                }
+                sb.AppendLine("};");
+            }
+        }
+        if (any) sb.AppendLine();
+    }
+
+    /// <summary>
+    /// Emit custom attribute arg/info arrays for a type and its members.
+    /// </summary>
+    private void EmitCustomAttributeArrays(StringBuilder sb, IRType type,
+        List<IRField> allFields, List<IRMethod> reflectableMethods)
+    {
+        // Type-level custom attributes
+        if (type.CustomAttributes.Count > 0)
+        {
+            EmitAttributeInfoArray(sb, $"{type.CppName}_custom_attrs", type.CustomAttributes);
+        }
+
+        // Field-level custom attributes
+        foreach (var field in allFields)
+        {
+            if (field.CustomAttributes.Count > 0)
+            {
+                EmitAttributeInfoArray(sb, $"{type.CppName}_{field.CppName}_attrs", field.CustomAttributes);
+            }
+        }
+
+        // Method-level custom attributes
+        foreach (var method in reflectableMethods)
+        {
+            if (method.CustomAttributes.Count > 0)
+            {
+                EmitAttributeInfoArray(sb, $"{method.CppName}_attrs", method.CustomAttributes);
+            }
+        }
+    }
+
+    /// <summary>
+    /// Emit a single CustomAttributeInfo array and its argument arrays.
+    /// </summary>
+    private void EmitAttributeInfoArray(StringBuilder sb, string arrayName, List<IRCustomAttribute> attrs)
+    {
+        // First, emit argument arrays for attributes that have arguments
+        for (int i = 0; i < attrs.Count; i++)
+        {
+            var attr = attrs[i];
+            if (attr.ConstructorArgs.Count > 0)
+            {
+                sb.AppendLine($"static cil2cpp::CustomAttributeArg {arrayName}_{i}_args[] = {{");
+                foreach (var arg in attr.ConstructorArgs)
+                {
+                    var valueInit = FormatAttributeArgValue(arg);
+                    sb.AppendLine($"    {{ .type_name = \"{arg.TypeName}\", {valueInit} }},");
+                }
+                sb.AppendLine("};");
+            }
+        }
+
+        // Then emit the CustomAttributeInfo array
+        sb.AppendLine($"static cil2cpp::CustomAttributeInfo {arrayName}[] = {{");
+        for (int i = 0; i < attrs.Count; i++)
+        {
+            var attr = attrs[i];
+            var argsExpr = attr.ConstructorArgs.Count > 0
+                ? $"{arrayName}_{i}_args" : "nullptr";
+            sb.AppendLine($"    {{ .attribute_type_name = \"{attr.AttributeTypeName}\", " +
+                $".args = {argsExpr}, " +
+                $".arg_count = {attr.ConstructorArgs.Count} }},");
+        }
+        sb.AppendLine("};");
+    }
+
+    /// <summary>
+    /// Format a custom attribute argument value for C++ designated initializer.
+    /// </summary>
+    private static string FormatAttributeArgValue(IRAttributeArg arg)
+    {
+        if (arg.Value == null)
+            return ".string_val = nullptr";
+
+        return arg.TypeName switch
+        {
+            "System.String" => $".string_val = \"{EscapeCppString(arg.Value.ToString() ?? "")}\"",
+            "System.Single" => $".float_val = {FormatFloat(arg.Value)}",
+            "System.Double" => $".float_val = {FormatDouble(arg.Value)}",
+            "System.Boolean" => $".int_val = {((bool)arg.Value ? 1 : 0)}",
+            "System.Char" => $".int_val = {(int)(char)arg.Value}",
+            _ => $".int_val = {Convert.ToInt64(arg.Value)}",
+        };
+    }
+
+    private static string EscapeCppString(string s) =>
+        s.Replace("\\", "\\\\").Replace("\"", "\\\"").Replace("\n", "\\n").Replace("\r", "\\r");
+
+    private static string FormatFloat(object val) =>
+        ((float)val).ToString("G9", System.Globalization.CultureInfo.InvariantCulture);
+
+    private static string FormatDouble(object val) =>
+        ((double)val).ToString("G17", System.Globalization.CultureInfo.InvariantCulture);
+
+    /// <summary>
+    /// Emit extern "C" declarations and managed wrapper functions for P/Invoke methods.
+    /// </summary>
+    // C stdlib functions that are already declared via standard headers — don't re-declare
+    private static readonly HashSet<string> CStdlibFunctions = new()
+    {
+        "strlen", "strcpy", "strncpy", "strcat", "strncat", "strcmp", "strncmp",
+        "memcpy", "memmove", "memset", "memcmp", "malloc", "calloc", "realloc", "free",
+        "printf", "sprintf", "snprintf", "fprintf", "puts", "putchar", "getchar",
+        "abs", "atoi", "atof", "atol", "rand", "srand", "exit", "abort",
+        "qsort", "bsearch", "time", "clock", "sin", "cos", "tan", "sqrt", "pow",
+        "fopen", "fclose", "fread", "fwrite", "fseek", "ftell"
+    };
+
+    private void EmitPInvokeDeclarations(StringBuilder sb, List<IRType> userTypes)
+    {
+        var pinvokeMethods = userTypes
+            .Where(t => !t.IsInterface && !t.IsDelegate && !t.IsRuntimeProvided)
+            .SelectMany(t => t.Methods)
+            .Where(m => m.IsPInvoke)
+            .ToList();
+
+        if (pinvokeMethods.Count == 0) return;
+
+        // Filter out C stdlib functions that are already available via standard headers
+        var needsExternDecl = pinvokeMethods
+            .Where(m => !CStdlibFunctions.Contains(m.PInvokeEntryPoint ?? m.Name))
+            .ToList();
+
+        if (needsExternDecl.Count > 0)
+        {
+            sb.AppendLine("// ===== P/Invoke Declarations =====");
+            sb.AppendLine("extern \"C\" {");
+
+            foreach (var method in needsExternDecl)
+            {
+                var entryPoint = method.PInvokeEntryPoint ?? method.Name;
+                var retType = GetPInvokeNativeType(method.ReturnTypeCpp);
+                var paramTypes = method.Parameters.Select(p => GetPInvokeNativeType(p.CppTypeName)).ToList();
+                var paramDecl = string.Join(", ", paramTypes.Select((t, i) => $"{t} p{i}"));
+                sb.AppendLine($"    {retType} {entryPoint}({paramDecl});");
+            }
+
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+
+        // Generate managed wrappers that marshal String* ↔ const char*
+        sb.AppendLine("// ===== P/Invoke Wrappers =====");
+        foreach (var method in pinvokeMethods)
+        {
+            var entryPoint = method.PInvokeEntryPoint ?? method.Name;
+            var retType = method.ReturnTypeCpp;
+            var sig = method.GetCppSignature();
+
+            sb.AppendLine($"// P/Invoke: {method.PInvokeModule}!{entryPoint}");
+            sb.AppendLine($"{sig} {{");
+
+            // Marshal arguments: String* → const char*
+            var callArgs = new List<string>();
+            for (int i = 0; i < method.Parameters.Count; i++)
+            {
+                var param = method.Parameters[i];
+                if (IsStringType(param.CppTypeName))
+                {
+                    // Marshal String* to C string
+                    sb.AppendLine($"    auto __p{i} = cil2cpp::string_to_utf8({param.CppName});");
+                    callArgs.Add($"__p{i}");
+                }
+                else
+                {
+                    callArgs.Add(param.CppName);
+                }
+            }
+
+            var argStr = string.Join(", ", callArgs);
+            if (retType == "void")
+            {
+                sb.AppendLine($"    {entryPoint}({argStr});");
+            }
+            else if (IsStringType(retType))
+            {
+                // Marshal const char* return to String*
+                sb.AppendLine($"    auto __ret = {entryPoint}({argStr});");
+                sb.AppendLine($"    return cil2cpp::string_literal(__ret);");
+            }
+            else
+            {
+                sb.AppendLine($"    return {entryPoint}({argStr});");
+            }
+
+            sb.AppendLine("}");
+            sb.AppendLine();
+        }
+    }
+
+    /// <summary>
+    /// Convert C++ managed type to native P/Invoke type.
+    /// String* → const char*, other types pass through.
+    /// </summary>
+    private static string GetPInvokeNativeType(string cppType) => cppType switch
+    {
+        "cil2cpp::String*" => "const char*",
+        "void" => "void",
+        _ => cppType
+    };
+
+    private static bool IsStringType(string cppType) =>
+        cppType is "cil2cpp::String*";
 }

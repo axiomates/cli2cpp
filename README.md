@@ -112,6 +112,8 @@ cmake --install build --config Debug --prefix <安装路径>
 │   ├── exception.h             #   异常处理（setjmp/longjmp）
 │   ├── type_info.h             #   TypeInfo / VTable / MethodInfo / FieldInfo
 │   ├── boxing.h                #   装箱/拆箱模板（box<T> / unbox<T>）
+│   ├── reflection.h            #   System.Type 反射包装（typeof / GetType / 属性查询）
+│   ├── threading.h             #   多线程原语（Thread / Monitor / Interlocked）
 │   └── bcl/                    #   BCL 实现头文件
 │       ├── System.Object.h
 │       ├── System.String.h
@@ -393,10 +395,10 @@ void Program_Main() {
 | `constrained.` 前缀 | ✅ | 泛型虚方法调用前缀，单态化后安全跳过（no-op） |
 | `sizeof` 操作码 | ✅ | 值类型大小查询 → C++ `sizeof()` |
 | `calli` 操作码 | ✅ | 间接函数调用（函数指针），支持 `delegate*` 场景 |
-| `ldtoken` / `typeof` | ⚠️ | 数组初始化 + 类型 token → `&TypeInfo` 指针；完整反射需 Phase 5 |
+| `ldtoken` / `typeof` | ✅ | 数组初始化 + 类型 token → `&TypeInfo` 指针；`typeof(T)` → `Type.GetTypeFromHandle` → 缓存的 `Type` 对象 |
 | `tail.` 前缀 | ✅ | 尾调用优化提示，AOT 编译中安全跳过（no-op） |
 | `readonly.` 前缀 | ✅ | `ldelema` 只读提示，AOT 编译中安全跳过（no-op） |
-| `volatile.` 前缀 | ✅ | 内存排序提示，单线程模型中安全跳过（no-op） |
+| `volatile.` 前缀 | ✅ | 生成 `std::atomic` 读写（`load(acquire)` / `store(release)`） |
 | `unaligned.` 前缀 | ✅ | 对齐提示，安全跳过（no-op） |
 
 ### 控制流
@@ -409,7 +411,7 @@ void Program_Main() {
 | 比较运算 (==, !=, <, >, <=, >=) | ✅ | ceq, cgt, cgt.un, clt, clt.un + 有符号/无符号条件分支 |
 | switch (IL switch 表) | ✅ | 编译为 C++ switch/goto 跳转表 |
 | 模式匹配 (switch 表达式) | ✅ | Roslyn 将所有模式编译为标准 IL（isinst/ceq/switch/分支链），CIL2CPP 全部支持；字符串模式需 `String.op_Equality` BCL 映射 |
-| Range / Index (..) | ❌ | |
+| Range / Index (..) | ✅ | `Index`（构造/GetOffset/Value/IsFromEnd）、`Range`（GetOffsetAndLength）、`arr[^1]`、`arr[1..3]`、`string[1..4]` |
 
 ### 算术与位运算
 
@@ -454,7 +456,7 @@ void Program_Main() {
 
 | 功能 | 状态 | 备注 |
 |------|------|------|
-| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | 手写映射 + 运行时实现 |
+| System.Object (ToString, GetHashCode, Equals, GetType) | ✅ | 手写映射 + 运行时实现；`GetType()` 返回缓存的 `Type` 对象 |
 | System.String (Concat, IsNullOrEmpty, Length) | ✅ | 手写映射 + 运行时实现 |
 | Console.WriteLine (全部重载) | ✅ | 手写映射，String, Int32, Int64, Single, Double, Boolean, Object |
 | Console.Write / ReadLine | ✅ | 手写映射 |
@@ -462,7 +464,7 @@ void Program_Main() {
 | 多程序集 BCL 自动翻译 | ⚠️ | `--multi-assembly` 模式：自动加载 BCL 程序集 + 树摇 + IL 翻译；需要更多 icall 覆盖 |
 | 集合类 (List, Dictionary, HashSet 等) | ⚠️ | 多程序集基础设施已就绪，需要完善 BCL icall 覆盖 |
 | System.IO (File, Stream) | ❌ | 需要文件系统 icall 实现 |
-| System.Net | ❌ | Phase 5 |
+| System.Net | ❌ | Phase 6 |
 
 ### 委托与事件
 
@@ -479,8 +481,8 @@ void Program_Main() {
 | 功能 | 状态 | 备注 |
 |------|------|------|
 | async / await | ⚠️ | 同步执行模型（Task 立即完成），支持 `Task<T>` + `await`，不支持真正并发 |
-| 多线程 (Thread, Task, lock) | ❌ | |
-| 反射 (Type.GetMethods 等) | ❌ | TypeInfo 有 MethodInfo/FieldInfo 数组但未填充 |
+| 多线程 | ✅ | `Thread`（创建/Start/Join）、`Monitor`（Enter/Exit/Wait/Pulse）、`lock` 语句、`Interlocked`（Increment/Decrement/Exchange/CompareExchange）、`Thread.Sleep`、`volatile` 字段 |
+| 反射 (typeof / GetType) | ⚠️ | `typeof(T)` / `obj.GetType()` → 缓存 `Type` 对象；13 项属性（Name/FullName/IsValueType/IsPrimitive 等）；op_Equality/op_Inequality；ECMA-335 FieldInfo/MethodInfo 元数据数组；不支持 GetMethods/GetFields/Invoke |
 | 特性 (Attribute) | ❌ | |
 | unsafe 代码 (指针, fixed, stackalloc) | ⚠️ | Ldobj/Stobj（类型化解引用）/Ldflda/Ldsflda/全 Ldind/Stind 变体已支持；fixed/stackalloc 未处理 |
 | P/Invoke / DllImport | ❌ | |
@@ -511,21 +513,20 @@ void Program_Main() {
 
 | 限制 | 说明 | 计划阶段 |
 |------|------|---------|
-| `Span<T>` / `Memory<T>` / `ref struct` | 需要 byref 语义和栈分配支持 | Phase 5 |
-| 多维数组 (`T[,]`) | 仅支持一维数组 (`T[]`)，多维数组需要不同的内存布局 | Phase 5 |
-| `async` / `await` 真正并发 | 同步执行模型已实现，不支持 `Task.Delay`/`WhenAll`/`ValueTask` | Phase 5 |
-| 多线程 (`Thread`, `Task`, `lock`) | `Monitor.Enter/Exit` 当前为空操作 stub，需要真正的同步原语 | Phase 5 |
-| 反射 (`Type.GetMethods` 等) | TypeInfo 结构已有 MethodInfo/FieldInfo 数组但尚未填充 | Phase 5 |
-| 特性 (`Attribute`) | 元数据存储和运行时查询 | Phase 5 |
-| P/Invoke / DllImport | 原生互操作，需要 marshaling 层 | Phase 5 |
-| `unsafe` 代码 (`fixed`, `stackalloc`) | `ldobj`/`stobj`（类型化）+ 全 `ldind`/`stind` 已支持；`fixed`/`stackalloc` 未处理 | Phase 5 |
-| LINQ | 需要 `IEnumerable<T>` BCL 翻译（基础设施已在 Phase 4 就绪） | Phase 5 |
-| 集合类 (`List<T>`, `Dictionary<K,V>`) | 需要 BCL 泛型类翻译（基础设施已在 Phase 4 就绪） | Phase 5 |
-| `using` 语句 | try/finally 已支持，需要 `IDisposable` 接口映射 | Phase 5 |
-| 增量/并发 GC | BoehmGC 支持增量模式，当前未启用 | Phase 5 |
-| SIMD / `System.Numerics.Vector` | 无平台内联函数 (intrinsics) 支持 | Phase 5+ |
-| 泛型协变/逆变 (`out T` / `in T`) | `IEnumerable<out T>` 等协变接口，需要运行时类型兼容性检查 | Phase 5 |
-| 默认接口方法 (C# 8+) | 接口中带默认实现的方法，需要 DIM 分派逻辑 | Phase 5 |
+| `Span<T>` / `Memory<T>` / `ref struct` | 需要 byref 语义和栈分配支持 | Phase 6 |
+| 多维数组 (`T[,]`) | 仅支持一维数组 (`T[]`)，多维数组需要不同的内存布局 | Phase 6 |
+| `async` / `await` 真正并发 | 同步执行模型已实现，不支持 `Task.Delay`/`WhenAll`/`ValueTask` | Phase 6 |
+| 反射 — 动态查询 | `typeof(T)` / `GetType()` / Type 属性已支持；`GetMethods()` / `GetFields()` / `Invoke()` 未实现 | Phase 6 |
+| 特性 (`Attribute`) | 元数据存储和运行时查询 | Phase 6 |
+| P/Invoke / DllImport | 原生互操作，需要 marshaling 层 | Phase 6 |
+| `unsafe` 代码 (`fixed`, `stackalloc`) | `ldobj`/`stobj`（类型化）+ 全 `ldind`/`stind` 已支持；`fixed`/`stackalloc` 未处理 | Phase 6 |
+| LINQ | 需要 `IEnumerable<T>` BCL 翻译（基础设施已在 Phase 4 就绪） | Phase 6 |
+| 集合类 (`List<T>`, `Dictionary<K,V>`) | 需要 BCL 泛型类翻译（基础设施已在 Phase 4 就绪） | Phase 6 |
+| `using` 语句 | try/finally 已支持，需要 `IDisposable` 接口映射 | Phase 6 |
+| 增量/并发 GC | BoehmGC 支持增量模式，当前未启用 | Phase 6 |
+| SIMD / `System.Numerics.Vector` | 无平台内联函数 (intrinsics) 支持 | Phase 6+ |
+| 泛型协变/逆变 (`out T` / `in T`) | `IEnumerable<out T>` 等协变接口，需要运行时类型兼容性检查 | Phase 6 |
+| 默认接口方法 (C# 8+) | 接口中带默认实现的方法，需要 DIM 分派逻辑 | Phase 6 |
 
 ### 实现层面的已知限制
 
@@ -575,12 +576,12 @@ Phase 1 (基础) ✅     Phase 2 (对象模型) ✅    Phase 3 (泛型/委托) �
        │                    │                        │
        └────────────────────┘────────────────────────┘
                                                      │
-              Phase 4 (多程序集/树摇) ✅         Phase 5 (高级运行时)
-                多程序集加载+解析                  async/await
-                可达性分析 (树摇)                  多线程
-                ICall 注册表                      反射 / 特性
-                BCL 类型自动翻译                   增量/并发 GC
-                --multi-assembly CLI              P/Invoke / unsafe
+              Phase 4 (多程序集/树摇) ✅         Phase 5 (高级运行时) ✅
+                多程序集加载+解析                  async/await (同步模型)
+                可达性分析 (树摇)                  多线程 (Thread/Monitor/lock/Interlocked)
+                ICall 注册表                      反射 (typeof/GetType/Type属性)
+                BCL 类型自动翻译                   Range/Index
+                --multi-assembly CLI
 ```
 
 ### BCL 策略：从手写映射到自动翻译
@@ -666,21 +667,18 @@ Phase 1-3 (单程序集):                   Phase 4+ (多程序集):
 | **ICall 注册表** | ✅ | `ICallRegistry`：42+ 个 `[InternalCall]` 方法到 C++ 函数的映射（Object, String, Array, Math, Environment, GC, Buffer, Type, Monitor, RuntimeHelpers） |
 | **运行时提供类型过滤** | ✅ | 代码生成器跳过已有 C++ 运行时实现的类型（Object, String, Array, Exception, Delegate）的结构体定义和方法实现 |
 | **`--multi-assembly` CLI** | ✅ | 新增命令行标志，启用完整多程序集流水线：AssemblySet → 可达性分析 → IRBuilder → C++ 代码生成 |
-| **运行时 icall 实现** | ✅ | `runtime/src/icall/icall.cpp`：Environment (NewLine, TickCount, ProcessorCount)、Buffer (Memmove, BlockCopy)、Type (GetTypeFromHandle)、Monitor (Enter/Exit stub)、RuntimeHelpers (InitializeArray) |
+| **运行时 icall 实现** | ✅ | `runtime/src/icall/icall.cpp`：Environment (NewLine, TickCount, ProcessorCount)、Buffer (Memmove, BlockCopy)、Type (GetTypeFromHandle → 反射 Type 对象)、Monitor (Enter/Exit/Wait/Pulse)、RuntimeHelpers (InitializeArray) |
 
-### Phase 5：高级运行时
+### Phase 5：高级运行时 ✅ 已完成
 
-复杂子系统，大多数基础程序不需要。
+async/await、多线程、基础反射、Range/Index。
 
-| 功能 | 说明 |
-|------|------|
-| **async / await** | ⚠️ 同步执行模型已实现（Task 立即完成），支持 `Task<T>` / `await`；不支持真正并发 |
-| **多线程** | Thread、Task、Monitor、lock 语句；需要多线程安全的 GC |
-| **反射** | 填充 MethodInfo / FieldInfo 数组，Type.GetMethods、Invoke |
-| **特性 (Attribute)** | 元数据存储和运行时查询 |
-| **增量/并发 GC** | BoehmGC 支持增量模式，当前未启用 |
-| **P/Invoke / DllImport** | 原生互操作 |
-| **unsafe 代码** | 指针运算、fixed、stackalloc |
+| 功能 | 状态 | 说明 |
+|------|------|------|
+| **async / await** | ✅ | 同步执行模型（Task 立即完成）：`Task<T>` / `TaskAwaiter<T>` / `AsyncTaskMethodBuilder<T>` BCL 拦截，Debug（类）/ Release（结构体）状态机 |
+| **多线程** | ✅ | `Thread`（创建/Start/Join）、`Monitor`（Enter/Exit/Wait/Pulse/TryEnter）、`lock` 语句、`Interlocked`（Increment/Decrement/Exchange/CompareExchange，int/long）、`Thread.Sleep`、`volatile` 字段（`std::atomic` load/store） |
+| **反射 (typeof / GetType)** | ✅ | `typeof(T)` → `ldtoken` + `GetTypeFromHandle` → 缓存 `Type` 对象（引用相等）；`obj.GetType()` → `Type`；13 项属性（Name/FullName/Namespace/BaseType/IsValueType/IsClass/IsPrimitive/IsInterface/IsAbstract/IsSealed/IsEnum/IsArray/IsGenericType）；`op_Equality`/`op_Inequality`；ECMA-335 FieldInfo/MethodInfo 元数据数组（flags/offset/method_pointer） |
+| **Range / Index** | ✅ | `Index`（构造/GetOffset/Value/IsFromEnd）、`Range`（GetOffsetAndLength）、`arr[^1]`、`arr[1..3]`、`string[1..4]` |
 
 ---
 
@@ -761,7 +759,7 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 
 | 模块 | 测试数 |
 |------|--------|
-| IRBuilder | 264 |
+| IRBuilder | 273 |
 | ILInstructionCategory | 173 |
 | CppNameMapper | 104 |
 | CppCodeGenerator | 70 |
@@ -780,11 +778,11 @@ dotnet test compiler/CIL2CPP.Tests --collect:"XPlat Code Coverage"
 | AssemblyReader | 12 |
 | IRField / IRVTableEntry / IRInterfaceImpl | 7 |
 | SequencePointInfo | 5 |
-| **合计** | **1022** |
+| **合计** | **1092** |
 
 ### 运行时单元测试 (C++ / Google Test)
 
-测试覆盖：GC（分配/回收/根/终结器）、字符串（创建/连接/比较/哈希/驻留）、数组（创建/越界检查）、类型系统（继承/接口/注册）、对象模型（分配/转型/相等性）、异常处理（抛出/捕获/栈回溯）。
+测试覆盖：GC（分配/回收/根/终结器）、字符串（创建/连接/比较/哈希/驻留）、数组（创建/越界检查）、类型系统（继承/接口/注册）、对象模型（分配/转型/相等性）、异常处理（抛出/捕获/栈回溯）、多线程（Thread/Monitor/Interlocked）、反射（Type 缓存/属性/方法）。
 
 ```bash
 # 配置 + 编译
@@ -798,6 +796,7 @@ ctest --test-dir runtime/tests/build -C Debug --output-on-failure
 | 模块 | 测试数 |
 |------|--------|
 | String | 52 |
+| Reflection | 46 |
 | Type System | 39 |
 | Object | 28 |
 | Console | 27 |
@@ -805,8 +804,9 @@ ctest --test-dir runtime/tests/build -C Debug --output-on-failure
 | Exception | 55 (1 disabled) |
 | Array | 21 |
 | Delegate | 18 |
+| Threading | 17 |
 | GC | 14 |
-| **合计** | **280** |
+| **合计** | **343** |
 
 ### 端到端集成测试
 

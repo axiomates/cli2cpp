@@ -93,11 +93,15 @@ TEST_F(DelegateTest, Combine_NullSecond_ReturnsFirst) {
     EXPECT_EQ(result, (Object*)del);
 }
 
-TEST_F(DelegateTest, Combine_BothValid_ReturnsSecond) {
+TEST_F(DelegateTest, Combine_BothValid_ReturnsMulticast) {
     auto* del1 = delegate_create(&DelegateTypeInfo, nullptr, (void*)test_static_add);
     auto* del2 = delegate_create(&DelegateTypeInfo, nullptr, (void*)test_static_mul);
     auto* result = delegate_combine((Object*)del1, (Object*)del2);
-    EXPECT_EQ(result, (Object*)del2);
+    auto* multicast = static_cast<Delegate*>(result);
+    EXPECT_NE(result, nullptr);
+    EXPECT_EQ(multicast->invocation_count, 2);
+    // Multicast delegates point method_ptr/target to the LAST delegate
+    EXPECT_EQ(multicast->method_ptr, (void*)test_static_mul);
 }
 
 // ===== delegate_remove =====

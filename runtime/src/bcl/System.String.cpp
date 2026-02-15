@@ -162,6 +162,10 @@ String* string_concat(String* a, String* b) {
     return result;
 }
 
+String* string_concat(String* a, String* b, String* c) {
+    return string_concat(string_concat(a, b), c);
+}
+
 Boolean string_equals(String* a, String* b) {
     if (a == b) return true;
     if (!a || !b) return false;
@@ -245,6 +249,12 @@ String* string_from_int32(Int32 value) {
 String* string_from_double(Double value) {
     char buf[32];
     snprintf(buf, sizeof(buf), "%g", value);
+    return string_create_utf8(buf);
+}
+
+String* string_from_int64(Int64 value) {
+    char buf[24];
+    snprintf(buf, sizeof(buf), "%lld", static_cast<long long>(value));
     return string_create_utf8(buf);
 }
 

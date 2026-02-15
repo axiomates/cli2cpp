@@ -104,6 +104,8 @@ public class MethodInfo
     public bool HasBody => _method.HasBody;
 
     public bool IsInternalCall => (_method.ImplAttributes & Mono.Cecil.MethodImplAttributes.InternalCall) != 0;
+    public bool IsPInvokeImpl => _method.IsPInvokeImpl;
+    public Mono.Cecil.PInvokeInfo? PInvokeInfo => _method.IsPInvokeImpl ? _method.PInvokeInfo : null;
     public bool HasGenericParameters => _method.HasGenericParameters;
     public IReadOnlyList<string> GenericParameterNames =>
         _method.GenericParameters.Select(p => p.Name).ToList();
@@ -195,6 +197,10 @@ public class ExceptionHandlerInfo
     public int HandlerEnd => _handler.HandlerEnd?.Offset ?? int.MaxValue;
     public string? CatchTypeName => _handler.CatchType?.FullName;
 
+    /// <summary>IL offset where the filter evaluation begins (only for Filter handlers).</summary>
+    public int? FilterStart => _handler.HandlerType == Mono.Cecil.Cil.ExceptionHandlerType.Filter
+        ? _handler.FilterStart?.Offset : null;
+
     public ExceptionHandlerInfo(Mono.Cecil.Cil.ExceptionHandler handler)
     {
         _handler = handler;
@@ -225,10 +231,12 @@ public class LocalVariableInfo
 {
     public int Index { get; }
     public string TypeName { get; }
+    public bool IsPinned { get; }
 
     public LocalVariableInfo(Mono.Cecil.Cil.VariableDefinition variable)
     {
         Index = variable.Index;
+        IsPinned = variable.IsPinned;
         TypeName = variable.VariableType.FullName;
     }
 }

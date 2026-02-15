@@ -22,12 +22,56 @@ public partial class CppCodeGenerator
             .Where(t => !CppNameMapper.IsCompilerGeneratedType(t.ILFullName))
             .ToList();
 
-        // Forward declarations (skip interfaces, enums, delegates, and runtime-provided types)
+        // Forward declarations — all types except enums, delegates, runtime-provided, and cil2cpp:: types
         sb.AppendLine("// ===== Forward Declarations =====");
+        var forwardDeclared = new HashSet<string>();
+        // Build set of types that will become using aliases (not struct forward-decls)
+        // Include ALL module types + well-known runtime types
+        var aliasedTypes = new HashSet<string>();
+        foreach (var type in _module.Types)
+        {
+            if (type.IsDelegate || type.IsRuntimeProvided)
+                aliasedTypes.Add(type.CppName);
+        }
+        // Also add RuntimeProvidedTypes mangled names (may not be in _module.Types)
+        foreach (var ilName in IRBuilder.RuntimeProvidedTypes)
+            aliasedTypes.Add(CppNameMapper.MangleTypeName(ilName));
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsEnum || type.IsDelegate || type.IsRuntimeProvided) continue;
+            if (type.IsEnum || type.IsDelegate || type.IsRuntimeProvided) continue;
+            // Types already declared in runtime headers (cil2cpp:: namespace)
+            if (type.CppName.Contains("::")) continue;
             sb.AppendLine($"struct {type.CppName};");
+            forwardDeclared.Add(type.CppName);
+        }
+        // Also forward-declare types referenced by method parameters/return types
+        // that aren't in the module (e.g., BCL interface types used as parameters)
+        foreach (var type in userTypes)
+        {
+            if (type.IsDelegate || type.IsRuntimeProvided) continue;
+            foreach (var method in type.Methods)
+            {
+                foreach (var param in method.Parameters)
+                {
+                    var raw = param.CppTypeName.TrimEnd('*').Trim();
+                    if (raw.Length == 0 || raw.StartsWith("cil2cpp::") || IsCppPrimitiveType(raw)) continue;
+                    // Don't forward-declare types that become using aliases (delegates, runtime-provided)
+                    if (aliasedTypes.Contains(raw)) continue;
+                    if (!forwardDeclared.Contains(raw))
+                    {
+                        sb.AppendLine($"struct {raw};");
+                        forwardDeclared.Add(raw);
+                    }
+                }
+            }
+        }
+        // Using aliases for runtime-provided types (mangled name → cil2cpp:: struct)
+        // These types are provided by the runtime but their mangled names may appear
+        // as generic type arguments or cast targets in generated code.
+        foreach (var (mangled, cppAlias) in GetRuntimeProvidedTypeAliases())
+        {
+            if (!forwardDeclared.Contains(mangled))
+                sb.AppendLine($"using {mangled} = {cppAlias};");
         }
         sb.AppendLine();
 
@@ -41,12 +85,22 @@ public partial class CppCodeGenerator
         // Primitive type TypeInfo declarations (for array element types)
         foreach (var entry in _module.PrimitiveTypeInfos.Values)
         {
-            sb.AppendLine($"extern cil2cpp::TypeInfo {entry.CppMangledName}_TypeInfo;");
+            var runtimeAlias = GetRuntimeTypeInfoAlias(entry.ILFullName);
+            if (runtimeAlias != null)
+                sb.AppendLine($"extern cil2cpp::TypeInfo& {entry.CppMangledName}_TypeInfo;");
+            else
+                sb.AppendLine($"extern cil2cpp::TypeInfo {entry.CppMangledName}_TypeInfo;");
         }
         sb.AppendLine();
 
-        // Struct definitions (skip runtime-provided types — already in runtime headers)
+        // Struct definitions — emit synthetic BCL types first (async Task<T>, builders, spans, etc.)
+        // These must come before user types that embed them as value fields or reference them.
         sb.AppendLine("// ===== Type Definitions =====");
+        foreach (var type in userTypes)
+        {
+            if (!type.IsRuntimeProvided || type.Fields.Count == 0) continue;
+            GenerateStructDefinition(sb, type);
+        }
         foreach (var type in userTypes)
         {
             if (type.IsRuntimeProvided) continue;
@@ -85,15 +139,36 @@ public partial class CppCodeGenerator
             }
         }
 
+        // Build set of known C++ type names (for filtering methods with unknown parameter types)
+        var knownTypeNames = new HashSet<string>();
+        foreach (var type in userTypes)
+        {
+            knownTypeNames.Add(type.CppName);
+        }
+
         // Method declarations (skip runtime-provided types and InternalCall methods)
         sb.AppendLine("// ===== Method Declarations =====");
         foreach (var type in userTypes)
         {
-            if (type.IsInterface || type.IsDelegate || type.IsRuntimeProvided) continue;
+            if (type.IsDelegate || type.IsRuntimeProvided) continue;
+
+            // For interfaces, only emit declarations for DIM methods (non-abstract with bodies)
+            if (type.IsInterface)
+            {
+                foreach (var method in type.Methods)
+                {
+                    if (method.IsAbstract || method.BasicBlocks.Count == 0) continue;
+                    sb.AppendLine($"{method.GetCppSignature()};");
+                }
+                continue;
+            }
 
             foreach (var method in type.Methods)
             {
                 if (method.IsAbstract || method.IsInternalCall) continue;
+                if (method.BasicBlocks.Count == 0 && !method.IsPInvoke) continue;
+                // Skip methods whose parameter types reference unknown struct types
+                if (HasUnknownParameterTypes(method, knownTypeNames)) continue;
                 sb.AppendLine($"{method.GetCppSignature()};");
             }
             sb.AppendLine();
@@ -180,6 +255,50 @@ public partial class CppCodeGenerator
                 result.Add((field, ancestor));
         }
         return result;
+    }
+
+    /// <summary>
+    /// Returns true if any parameter type references a non-pointer struct not in the known type set.
+    /// This filters out BCL methods that reference types not in the compilation unit (e.g. Func&lt;T&gt;).
+    /// Pointer-type parameters only need forward declarations, which are generated automatically.
+    /// </summary>
+    private static bool HasUnknownParameterTypes(IRMethod method, HashSet<string> knownTypeNames)
+    {
+        foreach (var param in method.Parameters)
+        {
+            var rawType = param.CppTypeName;
+            var typeName = rawType.TrimEnd('*').Trim();
+            // Skip known runtime types (cil2cpp:: namespace, primitive C++ types)
+            if (typeName.StartsWith("cil2cpp::") || IsCppPrimitiveType(typeName)) continue;
+            // Pointer-type params only need forward declarations (already emitted)
+            if (rawType.EndsWith("*")) continue;
+            // Non-pointer unknown struct: the body would need the full type definition
+            if (typeName.Length > 0 && !knownTypeNames.Contains(typeName))
+                return true;
+        }
+        return false;
+    }
+
+    private static bool IsCppPrimitiveType(string typeName)
+    {
+        return typeName is "bool" or "int8_t" or "uint8_t" or "int16_t" or "uint16_t"
+            or "int32_t" or "uint32_t" or "int64_t" or "uint64_t" or "float" or "double"
+            or "char16_t" or "intptr_t" or "uintptr_t" or "void";
+    }
+
+    /// <summary>
+    /// Get using aliases for runtime-provided types (mangled name → cil2cpp:: struct).
+    /// </summary>
+    private static IEnumerable<(string Mangled, string CppAlias)> GetRuntimeProvidedTypeAliases()
+    {
+        yield return ("System_Object", "cil2cpp::Object");
+        yield return ("System_String", "cil2cpp::String");
+        yield return ("System_Array", "cil2cpp::Array");
+        yield return ("System_Exception", "cil2cpp::Exception");
+        yield return ("System_Delegate", "cil2cpp::Delegate");
+        yield return ("System_MulticastDelegate", "cil2cpp::Delegate");
+        yield return ("System_Type", "cil2cpp::Object");  // Type represented as opaque pointer
+        yield return ("System_Attribute", "cil2cpp::Object");  // Base class for all attributes
     }
 
     private void GenerateEnumDefinition(StringBuilder sb, IRType type)

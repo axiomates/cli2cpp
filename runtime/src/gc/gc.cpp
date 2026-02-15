@@ -20,6 +20,7 @@ namespace gc {
 
 void init(const GCConfig&) {
     GC_INIT();
+    GC_enable_incremental();
     GC_allow_register_threads();
 }
 
@@ -83,6 +84,19 @@ void* alloc_array(TypeInfo* element_type, size_t length) {
 
 void collect() {
     GC_gcollect();
+}
+
+void set_incremental(bool enabled) {
+    if (enabled) {
+        GC_enable_incremental();
+    } else {
+        // BoehmGC does not provide a disable_incremental API;
+        // once enabled, incremental mode stays active.
+    }
+}
+
+bool collect_a_little() {
+    return GC_collect_a_little() != 0;
 }
 
 void register_thread() {

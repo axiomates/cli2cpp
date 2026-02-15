@@ -768,7 +768,8 @@ public class CppCodeGeneratorTests
 
         Assert.Contains("_vtable_methods", output.SourceFile.Content);
         Assert.Contains("_VTable", output.SourceFile.Content);
-        Assert.Contains("(void*)MyClass_Foo", output.SourceFile.Content);
+        // Typed function pointer cast for overload disambiguation
+        Assert.Contains("&MyClass_Foo", output.SourceFile.Content);
     }
 
     [Fact]

@@ -16,6 +16,9 @@ namespace cil2cpp {
 // Type registry
 static std::unordered_map<std::string, TypeInfo*> g_type_registry;
 
+// Forward declaration for variance check
+static Boolean type_is_variant_assignable(TypeInfo* target, TypeInfo* source);
+
 Boolean type_is_assignable_from(TypeInfo* target, TypeInfo* source) {
     if (!target || !source) {
         return false;
@@ -31,12 +34,62 @@ Boolean type_is_assignable_from(TypeInfo* target, TypeInfo* source) {
         return true;
     }
 
-    // Check interfaces
+    // Check interfaces (exact match)
     if (target->flags & TypeFlags::Interface) {
-        return type_implements_interface(source, target);
+        if (type_implements_interface(source, target)) {
+            return true;
+        }
+    }
+
+    // Variance-aware check: if both are generic instances of the same open type,
+    // check if assignment is valid considering co/contravariance
+    if (type_is_variant_assignable(target, source)) {
+        return true;
+    }
+
+    // Check if source implements a variant-compatible interface
+    if ((target->flags & TypeFlags::Interface) && target->generic_definition_name) {
+        // Walk source's interfaces and check variant compatibility
+        TypeInfo* current = source;
+        while (current) {
+            for (UInt32 i = 0; i < current->interface_count; i++) {
+                if (type_is_variant_assignable(target, current->interfaces[i])) {
+                    return true;
+                }
+            }
+            current = current->base_type;
+        }
     }
 
     return false;
+}
+
+/// Check if two generic instances of the same open type are variant-compatible.
+static Boolean type_is_variant_assignable(TypeInfo* target, TypeInfo* source) {
+    if (!target || !source) return false;
+    if (target->generic_argument_count == 0 || source->generic_argument_count == 0) return false;
+    if (target->generic_argument_count != source->generic_argument_count) return false;
+    if (!target->generic_definition_name || !source->generic_definition_name) return false;
+    if (std::strcmp(target->generic_definition_name, source->generic_definition_name) != 0) return false;
+
+    for (UInt32 i = 0; i < target->generic_argument_count; i++) {
+        auto* t_arg = target->generic_arguments[i];
+        auto* s_arg = source->generic_arguments[i];
+        if (t_arg == s_arg) continue;
+
+        uint8_t variance = target->generic_variances ? target->generic_variances[i] : 0;
+        if (variance == 1) {
+            // Covariant (out T): source arg must be assignable TO target arg
+            if (!type_is_assignable_from(t_arg, s_arg)) return false;
+        } else if (variance == 2) {
+            // Contravariant (in T): target arg must be assignable TO source arg
+            if (!type_is_assignable_from(s_arg, t_arg)) return false;
+        } else {
+            // Invariant: must be identical
+            return false;
+        }
+    }
+    return true;
 }
 
 Boolean type_is_subclass_of(TypeInfo* type, TypeInfo* base_type) {
@@ -148,6 +201,7 @@ Object* object_as(Object* obj, TypeInfo* type) {
 }
 
 Object* object_cast(Object* obj, TypeInfo* type) {
+    if (!obj) return nullptr;  // ECMA-335: castclass on null returns null
     if (object_is_instance_of(obj, type)) {
         return obj;
     }
@@ -164,6 +218,42 @@ Object* object_memberwise_clone(Object* obj) {
     auto* clone = static_cast<Object*>(gc::alloc(type->instance_size, type));
     std::memcpy(clone, obj, type->instance_size);
     return clone;
+}
+
+// ===== Custom Attribute Queries =====
+
+Boolean type_has_attribute(TypeInfo* type, const char* attr_type_name) {
+    return type_get_attribute(type, attr_type_name) != nullptr;
+}
+
+CustomAttributeInfo* type_get_attribute(TypeInfo* type, const char* attr_type_name) {
+    if (!type || !attr_type_name || type->custom_attribute_count == 0) return nullptr;
+    for (UInt32 i = 0; i < type->custom_attribute_count; i++) {
+        if (std::strcmp(type->custom_attributes[i].attribute_type_name, attr_type_name) == 0) {
+            return &type->custom_attributes[i];
+        }
+    }
+    return nullptr;
+}
+
+Boolean method_has_attribute(MethodInfo* method, const char* attr_type_name) {
+    if (!method || !attr_type_name || method->custom_attribute_count == 0) return false;
+    for (UInt32 i = 0; i < method->custom_attribute_count; i++) {
+        if (std::strcmp(method->custom_attributes[i].attribute_type_name, attr_type_name) == 0) {
+            return true;
+        }
+    }
+    return false;
+}
+
+Boolean field_has_attribute(FieldInfo* field, const char* attr_type_name) {
+    if (!field || !attr_type_name || field->custom_attribute_count == 0) return false;
+    for (UInt32 i = 0; i < field->custom_attribute_count; i++) {
+        if (std::strcmp(field->custom_attributes[i].attribute_type_name, attr_type_name) == 0) {
+            return true;
+        }
+    }
+    return false;
 }
 
 } // namespace cil2cpp

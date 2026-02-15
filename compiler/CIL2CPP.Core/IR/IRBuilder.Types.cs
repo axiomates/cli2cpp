@@ -1,4 +1,5 @@
 using CIL2CPP.Core.IL;
+using Mono.Cecil;
 
 namespace CIL2CPP.Core.IR;
 
@@ -34,6 +35,22 @@ public partial class IRBuilder
         {
             CppNameMapper.RegisterValueType(typeDef.FullName);
             CppNameMapper.RegisterValueType(cppName);
+        }
+
+        // Extract generic parameter variance (ECMA-335 II.9.11)
+        var cecilType = typeDef.GetCecilType();
+        if (cecilType.HasGenericParameters)
+        {
+            foreach (var gp in cecilType.GenericParameters)
+            {
+                var variance = (gp.Attributes & GenericParameterAttributes.VarianceMask) switch
+                {
+                    GenericParameterAttributes.Covariant => GenericVariance.Covariant,
+                    GenericParameterAttributes.Contravariant => GenericVariance.Contravariant,
+                    _ => GenericVariance.Invariant,
+                };
+                irType.GenericParameterVariances.Add(variance);
+            }
         }
 
         return irType;
@@ -76,6 +93,7 @@ public partial class IRBuilder
             }
 
             irField.ConstantValue = fieldDef.ConstantValue;
+            irField.Attributes = (uint)fieldDef.GetCecilField().Attributes;
 
             if (fieldDef.IsStatic)
                 irType.StaticFields.Add(irField);

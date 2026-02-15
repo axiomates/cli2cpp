@@ -45,6 +45,7 @@ String* string_literal(const char* utf8);
  * Concatenate two strings.
  */
 String* string_concat(String* a, String* b);
+String* string_concat(String* a, String* b, String* c);
 
 /**
  * Compare two strings for equality.
@@ -87,5 +88,10 @@ String* string_from_int32(Int32 value);
  * Convert a double to a string.
  */
 String* string_from_double(Double value);
+
+/**
+ * Convert an int64 to a string.
+ */
+String* string_from_int64(Int64 value);
 
 } // namespace cil2cpp

@@ -78,7 +78,7 @@ public class IRInstructionTests
         };
         instr.Arguments.Add("__this");
         Assert.Equal("__t0 = ((cil2cpp::String*(*)(Animal*))(((" +
-            "cil2cpp::Object*)__this)->__type_info->vtable->methods[0]))(__this);", instr.ToCpp());
+            "cil2cpp::Object*)__this)->__type_info->vtable->methods[0]))((Animal*)__this);", instr.ToCpp());
     }
 
     [Fact]
@@ -442,6 +442,25 @@ public class IRInstructionTests
     {
         var instr = new IRRethrow();
         Assert.Equal("CIL2CPP_RETHROW;", instr.ToCpp());
+    }
+
+    // ===== Exception Filters =====
+
+    [Fact]
+    public void IRFilterBegin_ToCpp()
+    {
+        var instr = new IRFilterBegin();
+        Assert.Equal("CIL2CPP_FILTER_BEGIN", instr.ToCpp());
+    }
+
+    [Fact]
+    public void IREndFilter_ToCpp()
+    {
+        var instr = new IREndFilter();
+        var code = instr.ToCpp();
+        Assert.Contains("__filter_result", code);
+        Assert.Contains("__exc_caught", code);
+        Assert.Contains("CIL2CPP_RETHROW", code);
     }
 
     // ===== Phase 2: Interface dispatch ToCpp =====

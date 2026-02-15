@@ -9,7 +9,9 @@
 #include <cil2cpp/array.h>
 #include <cil2cpp/type_info.h>
 #include <cil2cpp/gc.h>
+#include <cil2cpp/exception.h>
 #include <cil2cpp/threading.h>
+#include <cil2cpp/reflection.h>
 
 #include <chrono>
 #include <cstring>
@@ -45,6 +47,11 @@ Int32 Environment_get_ProcessorCount() {
     return count > 0 ? static_cast<Int32>(count) : 1;
 }
 
+Int32 Environment_get_CurrentManagedThreadId() {
+    // Return a hash of the native thread ID as a managed thread ID
+    return static_cast<Int32>(std::hash<std::thread::id>{}(std::this_thread::get_id()) & 0x7FFFFFFF);
+}
+
 // ===== System.Buffer =====
 
 void Buffer_Memmove(void* dest, void* src, UInt64 len) {
@@ -63,17 +70,17 @@ void Buffer_BlockCopy(Object* src, Int32 srcOffset, Object* dst, Int32 dstOffset
 // ===== System.Type =====
 
 Object* Type_GetTypeFromHandle(void* handle) {
-    // Stub: RuntimeTypeHandle → Type object
-    // In a full implementation, this would look up the TypeInfo and create a Type wrapper.
-    // For now, return nullptr (not yet needed for basic scenarios).
-    (void)handle;
-    return nullptr;
+    return reinterpret_cast<Object*>(type_get_type_from_handle(handle));
 }
 
 // ===== System.Threading.Monitor =====
 
 void Monitor_Enter(Object* obj) {
     monitor::enter(obj);
+}
+
+void Monitor_Enter2(Object* obj, bool* lockTaken) {
+    monitor::reliable_enter(obj, lockTaken);
 }
 
 void Monitor_Exit(Object* obj) {
@@ -114,6 +121,20 @@ Object* Interlocked_CompareExchange_obj(Object** location, Object* value, Object
 
 void Thread_Sleep(Int32 milliseconds) {
     thread::sleep(milliseconds);
+}
+
+// ===== System.ArgumentNullException =====
+
+void ArgumentNullException_ThrowIfNull(Object* arg, String* paramName) {
+    if (arg == nullptr) {
+        throw_argument_null();
+    }
+}
+
+// ===== System.ThrowHelper =====
+
+void ThrowHelper_ThrowArgumentException(Int32 resource) {
+    throw_argument();
 }
 
 // ===== System.Runtime.CompilerServices.RuntimeHelpers =====

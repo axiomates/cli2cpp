@@ -68,7 +68,9 @@ public class IRCall : IRInstruction
                 ? string.Join(", ", VTableParamTypes) : "void*";
             var fnPtrType = $"{VTableReturnType ?? "void"}(*)({paramTypesStr})";
             var thisExpr = Arguments[0];
-            call = $"(({fnPtrType})(cil2cpp::type_get_interface_vtable_checked(((cil2cpp::Object*){thisExpr})->__type_info, &{InterfaceTypeCppName}_TypeInfo)->methods[{VTableSlot}]))({args})";
+            // Cast arguments to match function pointer param types (handles Dog* → Object* etc.)
+            var castArgs = BuildCastArgs();
+            call = $"(({fnPtrType})(cil2cpp::type_get_interface_vtable_checked(((cil2cpp::Object*){thisExpr})->__type_info, &{InterfaceTypeCppName}_TypeInfo)->methods[{VTableSlot}]))({castArgs})";
         }
         else if (IsVirtual && VTableSlot >= 0 && Arguments.Count > 0)
         {
@@ -76,7 +78,9 @@ public class IRCall : IRInstruction
                 ? string.Join(", ", VTableParamTypes) : "void*";
             var fnPtrType = $"{VTableReturnType ?? "void"}(*)({paramTypesStr})";
             var thisExpr = Arguments[0];
-            call = $"(({fnPtrType})(((cil2cpp::Object*){thisExpr})->__type_info->vtable->methods[{VTableSlot}]))({args})";
+            // Cast arguments to match function pointer param types (handles Dog* → Object* etc.)
+            var castArgs = BuildCastArgs();
+            call = $"(({fnPtrType})(((cil2cpp::Object*){thisExpr})->__type_info->vtable->methods[{VTableSlot}]))({castArgs})";
         }
         else
         {
@@ -84,6 +88,26 @@ public class IRCall : IRInstruction
         }
 
         return ResultVar != null ? $"{ResultVar} = {call};" : $"{call};";
+    }
+
+    /// <summary>
+    /// Build argument list with casts to match VTableParamTypes.
+    /// This handles implicit upcasts (e.g., Dog* passed to Object* parameter).
+    /// </summary>
+    private string BuildCastArgs()
+    {
+        if (VTableParamTypes == null || VTableParamTypes.Count == 0)
+            return string.Join(", ", Arguments);
+
+        var parts = new List<string>();
+        for (int i = 0; i < Arguments.Count; i++)
+        {
+            if (i < VTableParamTypes.Count && VTableParamTypes[i].EndsWith("*"))
+                parts.Add($"({VTableParamTypes[i]}){Arguments[i]}");
+            else
+                parts.Add(Arguments[i]);
+        }
+        return string.Join(", ", parts);
     }
 }
 
@@ -175,12 +199,34 @@ public class IRFieldAccess : IRInstruction
     public string ResultVar { get; set; } = "";
     public bool IsStore { get; set; }
     public string? StoreValue { get; set; }
+    /// <summary>
+    /// True when the object expression is a value (struct) rather than a pointer.
+    /// Uses `.` instead of `->` for field access.
+    /// </summary>
+    public bool IsValueAccess { get; set; }
 
     public override string ToCpp()
     {
+        var obj = ObjectExpr;
+        string access;
+        if (IsValueAccess)
+        {
+            // Value type: use dot accessor
+            access = $"{obj}.{FieldCppName}";
+        }
+        else if (obj.StartsWith("&"))
+        {
+            // Address expression: needs parentheses for correct precedence
+            access = $"({obj})->{FieldCppName}";
+        }
+        else
+        {
+            access = $"{obj}->{FieldCppName}";
+        }
+
         if (IsStore)
-            return $"{ObjectExpr}->{FieldCppName} = {StoreValue};";
-        return $"{ResultVar} = {ObjectExpr}->{FieldCppName};";
+            return $"{access} = {StoreValue};";
+        return $"{ResultVar} = {access};";
     }
 }
 
@@ -259,9 +305,14 @@ public class IRBox : IRInstruction
 {
     public string ValueExpr { get; set; } = "";
     public string ValueTypeCppName { get; set; } = "";
+    /// <summary>TypeInfo reference name (mangled IL name). Falls back to ValueTypeCppName if null.</summary>
+    public string? TypeInfoCppName { get; set; }
     public string ResultVar { get; set; } = "";
-    public override string ToCpp() =>
-        $"{ResultVar} = cil2cpp::box<{ValueTypeCppName}>({ValueExpr}, &{ValueTypeCppName}_TypeInfo);";
+    public override string ToCpp()
+    {
+        var typeInfoName = TypeInfoCppName ?? ValueTypeCppName;
+        return $"{ResultVar} = cil2cpp::box<{ValueTypeCppName}>({ValueExpr}, &{typeInfoName}_TypeInfo);";
+    }
 }
 
 public class IRUnbox : IRInstruction
@@ -303,6 +354,17 @@ public class IRFinallyBegin : IRInstruction
 public class IRTryEnd : IRInstruction
 {
     public override string ToCpp() => "CIL2CPP_END_TRY";
+}
+
+public class IRFilterBegin : IRInstruction
+{
+    public override string ToCpp() => "CIL2CPP_FILTER_BEGIN";
+}
+
+public class IREndFilter : IRInstruction
+{
+    public override string ToCpp() =>
+        "if (__filter_result) { __exc_caught = true; } else { CIL2CPP_RETHROW; }";
 }
 
 public class IRThrow : IRInstruction
@@ -378,7 +440,12 @@ public class IRDelegateInvoke : IRInstruction
             : $"{ReturnTypeCpp}(*)()";
         var staticCall = $"(({staticFnPtr})({del}->method_ptr))({string.Join(", ", Arguments)})";
 
-        var assign = ResultVar != null ? $"{ResultVar} = " : "";
-        return $"if ({del}->target) {{ {assign}{instanceCall}; }} else {{ {assign}{staticCall}; }}";
+        if (ResultVar != null)
+        {
+            // Declare the result variable before the if/else to avoid auto-declaration
+            // inside a compound statement (which AddAutoDeclarations can't handle)
+            return $"{ReturnTypeCpp} {ResultVar};\n    if ({del}->target) {{ {ResultVar} = {instanceCall}; }} else {{ {ResultVar} = {staticCall}; }}";
+        }
+        return $"if ({del}->target) {{ {instanceCall}; }} else {{ {staticCall}; }}";
     }
 }

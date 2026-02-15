@@ -33,6 +33,9 @@ add_executable(cil2cpp_tests
     test_boxing.cpp
     test_console.cpp
     test_threading.cpp
+    test_reflection.cpp
+    test_collections.cpp
+    test_async.cpp
 )
 
 target_link_libraries(cil2cpp_tests

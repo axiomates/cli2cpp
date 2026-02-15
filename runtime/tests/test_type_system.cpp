@@ -642,3 +642,301 @@ TEST_F(TypeSystemTest, ObjectCast_Incompatible_Throws) {
 
     EXPECT_TRUE(caught);
 }
+
+// ===== Generic Variance Tests =====
+
+// Setup: ICovariant<out T> — covariant interface
+// ICovariant<Animal> should be assignable from ICovariant<Dog> (Dog : Animal)
+// IContravariant<in T> — contravariant interface
+// IContravariant<Dog> should be assignable from IContravariant<Animal>
+
+// Open generic definition types (shared between instances)
+static TypeInfo ICovariantOpenType = {
+    .name = "ICovariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.ICovariant`1",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+};
+
+static TypeInfo IContravariantOpenType = {
+    .name = "IContravariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IContravariant`1",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+};
+
+static TypeInfo IInvariantOpenType = {
+    .name = "IInvariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IInvariant`1",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+};
+
+// Covariant instances: ICovariant<Animal>, ICovariant<Dog>
+static TypeInfo* ICov_Animal_args[] = { &AnimalType };
+static uint8_t ICov_variances[] = { 1 }; // Covariant
+
+static TypeInfo ICovariant_Animal = {
+    .name = "ICovariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.ICovariant<Tests.Animal>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = ICov_Animal_args,
+    .generic_variances = ICov_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.ICovariant`1",
+};
+
+static TypeInfo* ICov_Dog_args[] = { &DogType };
+
+static TypeInfo ICovariant_Dog = {
+    .name = "ICovariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.ICovariant<Tests.Dog>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = ICov_Dog_args,
+    .generic_variances = ICov_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.ICovariant`1",
+};
+
+// Contravariant instances: IContravariant<Animal>, IContravariant<Dog>
+static TypeInfo* IContra_Animal_args[] = { &AnimalType };
+static uint8_t IContra_variances[] = { 2 }; // Contravariant
+
+static TypeInfo IContravariant_Animal = {
+    .name = "IContravariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IContravariant<Tests.Animal>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = IContra_Animal_args,
+    .generic_variances = IContra_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.IContravariant`1",
+};
+
+static TypeInfo* IContra_Dog_args[] = { &DogType };
+
+static TypeInfo IContravariant_Dog = {
+    .name = "IContravariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IContravariant<Tests.Dog>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = IContra_Dog_args,
+    .generic_variances = IContra_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.IContravariant`1",
+};
+
+// Invariant instances: IInvariant<Animal>, IInvariant<Dog>
+static TypeInfo* IInv_Animal_args[] = { &AnimalType };
+static uint8_t IInv_variances[] = { 0 }; // Invariant
+
+static TypeInfo IInvariant_Animal = {
+    .name = "IInvariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IInvariant<Tests.Animal>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = IInv_Animal_args,
+    .generic_variances = IInv_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.IInvariant`1",
+};
+
+static TypeInfo* IInv_Dog_args[] = { &DogType };
+
+static TypeInfo IInvariant_Dog = {
+    .name = "IInvariant`1",
+    .namespace_name = "Tests",
+    .full_name = "Tests.IInvariant<Tests.Dog>",
+    .base_type = nullptr,
+    .interfaces = nullptr,
+    .interface_count = 0,
+    .instance_size = 0,
+    .element_size = 0,
+    .flags = TypeFlags::Interface | TypeFlags::Generic,
+    .vtable = nullptr,
+    .fields = nullptr,
+    .field_count = 0,
+    .methods = nullptr,
+    .method_count = 0,
+    .default_ctor = nullptr,
+    .finalizer = nullptr,
+    .interface_vtables = nullptr,
+    .interface_vtable_count = 0,
+    .custom_attributes = nullptr,
+    .custom_attribute_count = 0,
+    .generic_arguments = IInv_Dog_args,
+    .generic_variances = IInv_variances,
+    .generic_argument_count = 1,
+    .generic_definition_name = "Tests.IInvariant`1",
+};
+
+TEST_F(TypeSystemTest, Variance_Covariant_DogAssignableToAnimal) {
+    // ICovariant<Animal> should be assignable from ICovariant<Dog>
+    // because Dog : Animal and T is covariant (out T)
+    EXPECT_TRUE(type_is_assignable_from(&ICovariant_Animal, &ICovariant_Dog));
+}
+
+TEST_F(TypeSystemTest, Variance_Covariant_AnimalNotAssignableToDog) {
+    // ICovariant<Dog> should NOT be assignable from ICovariant<Animal>
+    EXPECT_FALSE(type_is_assignable_from(&ICovariant_Dog, &ICovariant_Animal));
+}
+
+TEST_F(TypeSystemTest, Variance_Contravariant_AnimalAssignableToDog) {
+    // IContravariant<Dog> should be assignable from IContravariant<Animal>
+    // because Dog : Animal and T is contravariant (in T)
+    EXPECT_TRUE(type_is_assignable_from(&IContravariant_Dog, &IContravariant_Animal));
+}
+
+TEST_F(TypeSystemTest, Variance_Contravariant_DogNotAssignableToAnimal) {
+    // IContravariant<Animal> should NOT be assignable from IContravariant<Dog>
+    EXPECT_FALSE(type_is_assignable_from(&IContravariant_Animal, &IContravariant_Dog));
+}
+
+TEST_F(TypeSystemTest, Variance_Invariant_NotAssignable) {
+    // IInvariant<Animal> should NOT be assignable from IInvariant<Dog>
+    EXPECT_FALSE(type_is_assignable_from(&IInvariant_Animal, &IInvariant_Dog));
+    EXPECT_FALSE(type_is_assignable_from(&IInvariant_Dog, &IInvariant_Animal));
+}
+
+TEST_F(TypeSystemTest, Variance_SameType_Assignable) {
+    // Same generic instance should always be assignable
+    EXPECT_TRUE(type_is_assignable_from(&ICovariant_Dog, &ICovariant_Dog));
+    EXPECT_TRUE(type_is_assignable_from(&IContravariant_Animal, &IContravariant_Animal));
+}
+
+TEST_F(TypeSystemTest, Variance_DifferentOpenType_NotAssignable) {
+    // ICovariant<Animal> should NOT be assignable from IContravariant<Animal>
+    // (different open types)
+    EXPECT_FALSE(type_is_assignable_from(&ICovariant_Animal, &IContravariant_Animal));
+}
+
+TEST_F(TypeSystemTest, Variance_Covariant_ViaInterfaceOnClass) {
+    // A class implementing ICovariant<Dog> should be assignable to ICovariant<Animal>
+    static TypeInfo* impl_ifaces[] = { &ICovariant_Dog };
+    static TypeInfo CovariantDogImpl = {
+        .name = "CovariantDogImpl",
+        .namespace_name = "Tests",
+        .full_name = "Tests.CovariantDogImpl",
+        .base_type = &ObjectType,
+        .interfaces = impl_ifaces,
+        .interface_count = 1,
+        .instance_size = sizeof(Object),
+        .element_size = 0,
+        .flags = TypeFlags::None,
+    };
+    EXPECT_TRUE(type_is_assignable_from(&ICovariant_Animal, &CovariantDogImpl));
+}
+
+TEST_F(TypeSystemTest, Variance_Contravariant_ViaInterfaceOnClass) {
+    // A class implementing IContravariant<Animal> should be assignable to IContravariant<Dog>
+    static TypeInfo* impl_ifaces[] = { &IContravariant_Animal };
+    static TypeInfo ContravariantAnimalImpl = {
+        .name = "ContravariantAnimalImpl",
+        .namespace_name = "Tests",
+        .full_name = "Tests.ContravariantAnimalImpl",
+        .base_type = &ObjectType,
+        .interfaces = impl_ifaces,
+        .interface_count = 1,
+        .instance_size = sizeof(Object),
+        .element_size = 0,
+        .flags = TypeFlags::None,
+    };
+    EXPECT_TRUE(type_is_assignable_from(&IContravariant_Dog, &ContravariantAnimalImpl));
+}

@@ -77,4 +77,15 @@ inline void array_set(Array* arr, Int32 index, T value) {
     data[index] = value;
 }
 
+// ===== ICall functions for System.Array (work with both 1D and multi-dim arrays) =====
+
+/// System.Array::get_Length — total element count.
+Int32 array_get_length(Object* arr);
+
+/// System.Array::get_Rank — 1 for 1D arrays, rank for multi-dim.
+Int32 array_get_rank(Object* arr);
+
+/// System.Array::GetLength(int dimension) — length of a specific dimension.
+Int32 array_get_length_dim(Object* arr, Int32 dimension);
+
 } // namespace cil2cpp

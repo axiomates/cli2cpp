@@ -60,22 +60,25 @@ public partial class IRBuilder
 
         if (openTypeName.StartsWith("System.Threading.Tasks.Task`"))
         {
-            // Task<T>: f_status (Int32) + f_exception (Exception*) + f_result (T)
-            fields.Add(MakeSyntheticField("f_status", "System.Int32", irType));
-            fields.Add(MakeSyntheticField("f_exception", "System.Exception", irType));
-            fields.Add(MakeSyntheticField("f_result", tResult, irType));
+            // Task<T>: must match runtime Task struct layout + result field
+            // Layout: status, exception, continuations, lock, result
+            fields.Add(MakeSyntheticField("status", "System.Int32", irType));
+            fields.Add(MakeSyntheticField("exception", "System.Exception", irType));
+            fields.Add(MakeSyntheticField("continuations", "System.IntPtr", irType));
+            fields.Add(MakeSyntheticField("lock", "System.IntPtr", irType));
+            fields.Add(MakeSyntheticField("result", tResult, irType));
         }
         else if (openTypeName.StartsWith("System.Runtime.CompilerServices.TaskAwaiter`"))
         {
-            // TaskAwaiter<T>: f_task (Task<T>*)
+            // TaskAwaiter<T>: task (Task<T>*)
             var taskKey = $"System.Threading.Tasks.Task`1<{tResult}>";
-            fields.Add(MakeSyntheticField("f_task", taskKey, irType));
+            fields.Add(MakeSyntheticField("task", taskKey, irType));
         }
         else if (openTypeName.StartsWith("System.Runtime.CompilerServices.AsyncTaskMethodBuilder`"))
         {
-            // AsyncTaskMethodBuilder<T>: f_task (Task<T>*)
+            // AsyncTaskMethodBuilder<T>: task (Task<T>*)
             var taskKey = $"System.Threading.Tasks.Task`1<{tResult}>";
-            fields.Add(MakeSyntheticField("f_task", taskKey, irType));
+            fields.Add(MakeSyntheticField("task", taskKey, irType));
         }
 
         return fields;
@@ -136,13 +139,31 @@ public partial class IRBuilder
         {
             case "Create":
             {
-                // Static factory: returns zero-initialized builder with completed task
+                // Static factory: returns zero-initialized builder with pending task
                 var builderType = GetMangledTypeNameForRef(methodRef.DeclaringType);
                 var tmp = $"__t{tempCounter++}";
-                block.Instructions.Add(new IRRawCpp
+
+                if (methodRef.DeclaringType is GenericInstanceType builderGit
+                    && builderGit.GenericArguments.Count > 0)
                 {
-                    Code = $"{builderType} {tmp} = {{}}; {tmp}.f_task = cil2cpp::task_create_completed();"
-                });
+                    // Generic builder: allocate correctly-sized Task<T> using gc::alloc
+                    // (task_create_pending allocates sizeof(Task) which lacks the f_result field)
+                    var taskTypeCpp = ResolveTaskTypeCppName(builderGit.GenericArguments[0]);
+                    block.Instructions.Add(new IRRawCpp
+                    {
+                        Code = $"{builderType} {tmp} = {{}}; " +
+                               $"{tmp}.f_task = static_cast<{taskTypeCpp}*>(cil2cpp::gc::alloc(sizeof({taskTypeCpp}), nullptr)); " +
+                               $"cil2cpp::task_init_pending(reinterpret_cast<cil2cpp::Task*>({tmp}.f_task));"
+                    });
+                }
+                else
+                {
+                    // Non-generic builder: use standard task_create_pending (sizeof(Task) is correct)
+                    block.Instructions.Add(new IRRawCpp
+                    {
+                        Code = $"{builderType} {tmp} = {{}}; {tmp}.f_task = cil2cpp::task_create_pending();"
+                    });
+                }
                 stack.Push(tmp);
                 return true;
             }
@@ -157,10 +178,22 @@ public partial class IRBuilder
                 var moveNextName = ResolveMoveNextName(methodRef);
                 if (moveNextName != null)
                 {
+                    // For class state machines (Debug mode), smAddr is &loc_N (pointer to pointer).
+                    // MoveNext expects a single pointer. Dereference if needed.
+                    var smArg = smAddr;
+                    if (methodRef is GenericInstanceMethod gim2 && gim2.GenericArguments.Count > 0)
+                    {
+                        var smTypeRef = gim2.GenericArguments[0];
+                        bool isValueSm = false;
+                        try { isValueSm = smTypeRef.Resolve()?.IsValueType == true; }
+                        catch { }
+                        if (!isValueSm && smArg.StartsWith("&"))
+                            smArg = smArg[1..]; // Strip & — pointer variable itself is the correct arg
+                    }
                     block.Instructions.Add(new IRCall
                     {
                         FunctionName = moveNextName,
-                        Arguments = { smAddr },
+                        Arguments = { smArg },
                     });
                 }
                 return true;
@@ -181,40 +214,40 @@ public partial class IRBuilder
             {
                 if (isGeneric && methodRef.Parameters.Count == 1)
                 {
-                    // SetResult(T result) — generic version stores result
+                    // SetResult(T result) — generic version stores result, then completes
                     var result = stack.Count > 0 ? stack.Pop() : "0";
                     var thisArg = WrapThis(stack.Count > 0 ? stack.Pop() : "nullptr");
                     block.Instructions.Add(new IRRawCpp
                     {
-                        Code = $"{thisArg}->f_task->f_result = {result}; {thisArg}->f_task->f_status = 1;"
+                        Code = $"{thisArg}->f_task->f_result = {result}; cil2cpp::task_complete(reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task));"
                     });
                 }
                 else
                 {
-                    // SetResult() — non-generic version just marks complete
+                    // SetResult() — non-generic version completes with thread-safe API
                     var thisArg = WrapThis(stack.Count > 0 ? stack.Pop() : "nullptr");
                     block.Instructions.Add(new IRRawCpp
                     {
-                        Code = $"{thisArg}->f_task->f_status = 1;"
+                        Code = $"cil2cpp::task_complete({thisArg}->f_task);"
                     });
                 }
                 return true;
             }
             case "SetException":
             {
-                // SetException(Exception ex) — mark faulted
+                // SetException(Exception ex) — fault with thread-safe API + continuations
                 var ex = stack.Count > 0 ? stack.Pop() : "nullptr";
                 var thisArg = WrapThis(stack.Count > 0 ? stack.Pop() : "nullptr");
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"{thisArg}->f_task->f_exception = {ex}; {thisArg}->f_task->f_status = 2;"
+                    Code = $"cil2cpp::task_fault(reinterpret_cast<cil2cpp::Task*>({thisArg}->f_task), static_cast<cil2cpp::Exception*>({ex}));"
                 });
                 return true;
             }
             case "AwaitUnsafeOnCompleted" or "AwaitOnCompleted":
             {
                 // AwaitUnsafeOnCompleted<TAwaiter, TSM>(ref TAwaiter, ref TSM)
-                // In sync mode: just call MoveNext again (safe fallback)
+                // Register a continuation on the awaiter's task that calls MoveNext.
                 var smAddr = stack.Count > 0 ? stack.Pop() : "nullptr";
                 var awaiterAddr = stack.Count > 0 ? stack.Pop() : "nullptr";
                 var builderAddr = stack.Count > 0 ? stack.Pop() : "nullptr";
@@ -222,10 +255,25 @@ public partial class IRBuilder
                 var moveNextName = ResolveAwaitMoveNextName(methodRef);
                 if (moveNextName != null)
                 {
-                    block.Instructions.Add(new IRCall
+                    // Determine the state machine arg for continuation
+                    var smArg = smAddr;
+                    if (methodRef is GenericInstanceMethod gim2 && gim2.GenericArguments.Count >= 2)
                     {
-                        FunctionName = moveNextName,
-                        Arguments = { smAddr },
+                        var smTypeRef = gim2.GenericArguments[1];
+                        bool isValueSm = false;
+                        try { isValueSm = smTypeRef.Resolve()?.IsValueType == true; }
+                        catch { }
+                        if (!isValueSm && smArg.StartsWith("&"))
+                            smArg = smArg[1..]; // Strip & — pointer variable itself is the correct arg
+                    }
+
+                    // Get the task from the awaiter to register continuation on
+                    var awaiterDeref = awaiterAddr.StartsWith("&") ? $"({awaiterAddr})" : awaiterAddr;
+                    block.Instructions.Add(new IRRawCpp
+                    {
+                        Code = $"cil2cpp::task_add_continuation({awaiterDeref}->f_task, " +
+                               $"reinterpret_cast<void(*)(void*)>(&{moveNextName}), " +
+                               $"static_cast<void*>({smArg}));"
                     });
                 }
                 return true;
@@ -266,7 +314,12 @@ public partial class IRBuilder
             case "GetResult":
             {
                 var thisArg = WrapThis(stack.Count > 0 ? stack.Pop() : "nullptr");
-                // Check for faulted task
+                // Wait for the task to complete (blocks if still pending)
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"cil2cpp::task_wait({thisArg}->f_task);"
+                });
+                // Check for faulted task and rethrow exception
                 block.Instructions.Add(new IRRawCpp
                 {
                     Code = $"if ({thisArg}->f_task && {thisArg}->f_task->f_status == 2 && {thisArg}->f_task->f_exception) cil2cpp::throw_exception({thisArg}->f_task->f_exception);"
@@ -340,8 +393,12 @@ public partial class IRBuilder
             }
             case "get_Result":
             {
-                // Task<T>.Result property
+                // Task<T>.Result property — wait for completion then extract
                 var task = stack.Count > 0 ? stack.Pop() : "nullptr";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"cil2cpp::task_wait(reinterpret_cast<cil2cpp::Task*>({task}));"
+                });
                 block.Instructions.Add(new IRRawCpp
                 {
                     Code = $"if ({task} && {task}->f_status == 2 && {task}->f_exception) cil2cpp::throw_exception({task}->f_exception);"
@@ -360,34 +417,109 @@ public partial class IRBuilder
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"auto {tmp} = cil2cpp::task_is_completed({task});"
+                    Code = $"auto {tmp} = cil2cpp::task_is_completed(reinterpret_cast<cil2cpp::Task*>({task}));"
                 });
                 stack.Push(tmp);
                 return true;
             }
             case "FromResult":
             {
-                // Task.FromResult<T>(T value) — static generic method
+                // Task.FromResult<T>(T value) — allocate correctly-sized Task<T>
                 var value = stack.Count > 0 ? stack.Pop() : "0";
                 var tmp = $"__t{tempCounter++}";
 
                 // Get the concrete Task<T> type from the GenericInstanceMethod
                 var taskTypeCpp = ResolveTaskTypeFromFromResult(methodRef);
+                // Split into separate instructions to avoid AddAutoDeclarations conflict
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"auto* {tmp} = static_cast<{taskTypeCpp}*>(cil2cpp::task_create_completed()); {tmp}->f_result = {value};"
+                    Code = $"{tmp} = static_cast<{taskTypeCpp}*>(cil2cpp::gc::alloc(sizeof({taskTypeCpp}), nullptr));"
+                });
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"cil2cpp::task_init_completed(reinterpret_cast<cil2cpp::Task*>({tmp})); {tmp}->f_result = {value};"
                 });
                 stack.Push(tmp);
                 return true;
             }
             case "Delay":
             {
-                // Task.Delay(int) — ignore delay, return completed task
+                // Task.Delay(int milliseconds) — real async delay via thread pool
                 var ms = stack.Count > 0 ? stack.Pop() : "0";
                 var tmp = $"__t{tempCounter++}";
                 block.Instructions.Add(new IRRawCpp
                 {
-                    Code = $"auto {tmp} = cil2cpp::task_get_completed();"
+                    Code = $"auto {tmp} = cil2cpp::task_delay({ms});"
+                });
+                stack.Push(tmp);
+                return true;
+            }
+            case "Run":
+            {
+                // Task.Run(Action/Func<Task>) — run delegate on thread pool
+                var del = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = cil2cpp::task_run(static_cast<cil2cpp::Object*>({del}));"
+                });
+                stack.Push(tmp);
+                return true;
+            }
+            case "WhenAll":
+            {
+                // Task.WhenAll(Task[]) — complete when all tasks complete
+                var tasks = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = cil2cpp::task_when_all(static_cast<cil2cpp::Array*>(static_cast<cil2cpp::Object*>({tasks})));"
+                });
+                stack.Push(tmp);
+                return true;
+            }
+            case "WhenAny":
+            {
+                // Task.WhenAny(Task[]) — complete when any task completes
+                var tasks = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = cil2cpp::task_when_any(static_cast<cil2cpp::Array*>(static_cast<cil2cpp::Object*>({tasks})));"
+                });
+                stack.Push(tmp);
+                return true;
+            }
+            case "Wait":
+            {
+                // task.Wait() — block until completion
+                var task = stack.Count > 0 ? stack.Pop() : "nullptr";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"cil2cpp::task_wait(reinterpret_cast<cil2cpp::Task*>({task}));"
+                });
+                return true;
+            }
+            case "get_Status":
+            {
+                // task.Status — return status field
+                var task = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = {task}->f_status;"
+                });
+                stack.Push(tmp);
+                return true;
+            }
+            case "get_Exception":
+            {
+                // task.Exception — return exception field
+                var task = stack.Count > 0 ? stack.Pop() : "nullptr";
+                var tmp = $"__t{tempCounter++}";
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = static_cast<cil2cpp::Object*>({task}->f_exception);"
                 });
                 stack.Push(tmp);
                 return true;
@@ -443,6 +575,19 @@ public partial class IRBuilder
                 "System.Runtime.CompilerServices.TaskAwaiter`1", new List<string> { tResult });
         }
         return "System_Runtime_CompilerServices_TaskAwaiter";
+    }
+
+    /// <summary>
+    /// Resolve Task&lt;T&gt; C++ type name from a generic type argument T.
+    /// </summary>
+    private string ResolveTaskTypeCppName(TypeReference tResultRef)
+    {
+        var tResult = tResultRef.FullName;
+        var taskKey = $"System.Threading.Tasks.Task`1<{tResult}>";
+        if (_typeCache.TryGetValue(taskKey, out var taskType))
+            return taskType.CppName;
+        return CppNameMapper.MangleGenericInstanceTypeName(
+            "System.Threading.Tasks.Task`1", new List<string> { tResult });
     }
 
     /// <summary>

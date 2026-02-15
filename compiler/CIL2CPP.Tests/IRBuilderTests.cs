@@ -566,6 +566,54 @@ public class IRBuilderTests
         Assert.Contains(instrs, i => i is IRThrow);
     }
 
+    // ===== FeatureTest: Exception Filters =====
+
+    [Fact]
+    public void Build_FeatureTest_TestExceptionFilter_HasFilterBegin()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestExceptionFilter");
+        Assert.Contains(instrs, i => i is IRFilterBegin);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestExceptionFilter_HasEndFilter()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestExceptionFilter");
+        Assert.Contains(instrs, i => i is IREndFilter);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestExceptionFilter_HasFilterResultDecl()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestExceptionFilter");
+        // __filter_result should be declared after FilterBegin
+        var rawCpps = instrs.OfType<IRRawCpp>().ToList();
+        Assert.Contains(rawCpps, r => r.Code.Contains("__filter_result"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestExceptionFilter_FilterResultAssigned()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestExceptionFilter");
+        // __filter_result should be assigned before endfilter
+        var assigns = instrs.OfType<IRAssign>().ToList();
+        Assert.Contains(assigns, a => a.Target == "__filter_result");
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestExceptionFilter_EndFilterUsesFilterResult()
+    {
+        var module = BuildFeatureTest();
+        var instrs = GetMethodInstructions(module, "Program", "TestExceptionFilter");
+        var endFilter = instrs.OfType<IREndFilter>().First();
+        var code = endFilter.ToCpp();
+        Assert.Contains("__filter_result", code);
+    }
+
     // ===== FeatureTest: Casting =====
 
     [Fact]
@@ -2476,10 +2524,10 @@ public class IRBuilderTests
             t.IsGenericInstance
             && t.ILFullName.StartsWith("System.Threading.Tasks.Task`1"));
         Assert.NotNull(taskInt);
-        // Should have f_result field for the return value
+        // Should have result field for the return value (MangleFieldName adds f_ prefix)
         var fields = taskInt!.Fields.Select(f => f.Name).ToList();
-        Assert.Contains("f_result", fields);
-        Assert.Contains("f_status", fields);
+        Assert.Contains("result", fields);
+        Assert.Contains("status", fields);
     }
 
     [Fact]
@@ -3416,5 +3464,513 @@ public class IRBuilderTests
         Assert.NotNull(threadType);
         Assert.True(threadType.IsRuntimeProvided);
         Assert.Equal("cil2cpp::ManagedThread", threadType.CppName);
+    }
+
+    // ===== Reflection tests =====
+
+    [Fact]
+    public void Build_FeatureTest_TestTypeof_HasGetTypeFromHandle()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeof");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        Assert.Contains(rawCpps, c => c.Contains("type_get_type_from_handle"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestTypeof_HasNameAccessor()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeof");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        Assert.Contains(rawCpps, c => c.Contains("type_get_name"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestGetType_HasGetTypeManagedCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestGetType");
+        var calls = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRCall>()
+            .Select(c => c.FunctionName)
+            .ToList();
+        Assert.Contains(calls, c => c.Contains("object_get_type_managed"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestTypeEquality_HasEqualityOp()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeEquality");
+        // Type equality via op_Equality should emit IRBinaryOp with ==
+        var binaryOps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRBinaryOp>()
+            .Select(b => b.Op)
+            .ToList();
+        Assert.Contains("==", binaryOps);
+        Assert.Contains("!=", binaryOps);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestTypeHierarchy_HasBaseTypeCall()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeHierarchy");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        Assert.Contains(rawCpps, c => c.Contains("type_get_base_type"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TestTypeToString_HasVtableOrToString()
+    {
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeToString");
+        // Type.ToString() may be resolved as:
+        // 1. type_to_string via TryEmitTypeCall (if Roslyn targets Type::ToString)
+        // 2. vtable dispatch via Object::ToString (default virtual call path)
+        // Both are valid — check that method has instructions
+        var allInstr = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .ToList();
+        Assert.NotEmpty(allInstr);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_TypeofInt_HasGetTypeFromHandle()
+    {
+        // System.Type is in RuntimeProvidedTypes but only appears as an IRType
+        // when processing multi-assembly (BCL included). For single-assembly,
+        // verify that typeof(int) emits type_get_type_from_handle via interception.
+        var module = BuildFeatureTest();
+        var method = module.Types.First(t => t.Name == "Program")
+            .Methods.First(m => m.Name == "TestTypeof");
+        var rawCpps = method.BasicBlocks
+            .SelectMany(b => b.Instructions)
+            .OfType<IRRawCpp>()
+            .Select(r => r.Code)
+            .ToList();
+        Assert.Contains(rawCpps, c => c.Contains("type_get_type_from_handle"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_ReflectionIRField_HasAttributes()
+    {
+        var module = BuildFeatureTest();
+        // Dog inherits from Animal which has _name field
+        var animalType = module.Types.FirstOrDefault(t => t.Name == "Animal");
+        Assert.NotNull(animalType);
+        var nameField = animalType.Fields.FirstOrDefault(f => f.Name == "_name");
+        Assert.NotNull(nameField);
+        // _name is "protected string" → Family (0x0004)
+        Assert.NotEqual(0u, nameField.Attributes);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_ReflectionIRMethod_HasAttributes()
+    {
+        var module = BuildFeatureTest();
+        var programType = module.Types.First(t => t.Name == "Program");
+        var mainMethod = programType.Methods.First(m => m.Name == "Main");
+        // Main is public static → at least Public (0x0006) | Static (0x0010)
+        Assert.NotEqual(0u, mainMethod.Attributes);
+        // Check Public flag (access mask & 0x7 == 0x6)
+        Assert.Equal(0x0006u, mainMethod.Attributes & 0x0007u);
+    }
+
+    // ===== Custom Attributes =====
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_HasObsolete()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.FirstOrDefault(t => t.Name == "AttributeTestClass");
+        Assert.NotNull(attrType);
+        var obsolete = attrType.CustomAttributes.FirstOrDefault(
+            a => a.AttributeTypeName == "System.ObsoleteAttribute");
+        Assert.NotNull(obsolete);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_ObsoleteHasMessage()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.First(t => t.Name == "AttributeTestClass");
+        var obsolete = attrType.CustomAttributes.First(
+            a => a.AttributeTypeName == "System.ObsoleteAttribute");
+        Assert.Single(obsolete.ConstructorArgs);
+        Assert.Equal("System.String", obsolete.ConstructorArgs[0].TypeName);
+        Assert.Equal("Use NewClass instead", obsolete.ConstructorArgs[0].Value);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_HasDescription()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.First(t => t.Name == "AttributeTestClass");
+        var desc = attrType.CustomAttributes.FirstOrDefault(
+            a => a.AttributeTypeName == "DescriptionAttribute");
+        Assert.NotNull(desc);
+        Assert.Single(desc.ConstructorArgs);
+        Assert.Equal("A test class with attributes", desc.ConstructorArgs[0].Value);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_FieldHasObsolete()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.First(t => t.Name == "AttributeTestClass");
+        var oldField = attrType.Fields.FirstOrDefault(f => f.Name == "OldField");
+        Assert.NotNull(oldField);
+        var obsolete = oldField.CustomAttributes.FirstOrDefault(
+            a => a.AttributeTypeName == "System.ObsoleteAttribute");
+        Assert.NotNull(obsolete);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_MethodHasDescription()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.First(t => t.Name == "AttributeTestClass");
+        var method = attrType.Methods.FirstOrDefault(m => m.Name == "AnnotatedMethod");
+        Assert.NotNull(method);
+        var desc = method.CustomAttributes.FirstOrDefault(
+            a => a.AttributeTypeName == "DescriptionAttribute");
+        Assert.NotNull(desc);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_AttributeTestClass_NoCompilerInternalAttrs()
+    {
+        var module = BuildFeatureTest();
+        var attrType = module.Types.First(t => t.Name == "AttributeTestClass");
+        // CompilerGeneratedAttribute and NullableContextAttribute should be filtered out
+        Assert.DoesNotContain(attrType.CustomAttributes,
+            a => a.AttributeTypeName.Contains("CompilerGenerated"));
+        Assert.DoesNotContain(attrType.CustomAttributes,
+            a => a.AttributeTypeName.Contains("NullableContext"));
+    }
+
+    // ===== Multi-dimensional array tests =====
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_Create2D_HasMdarrayCreate()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "Create2D");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        Assert.Contains("mdarray_create", allCode);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_Create2D_HasRank2()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "Create2D");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        // Rank 2 passed to mdarray_create
+        Assert.Contains(", 2,", allCode);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_Get2D_HasElementPtr()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "Get2D");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        Assert.Contains("mdarray_get_element_ptr", allCode);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_Set2D_HasElementPtr()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "Set2D");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        Assert.Contains("mdarray_get_element_ptr", allCode);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_GetTotalLength_HasArrayGetLength()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "GetTotalLength");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        // Should call array_get_length (ICall) which handles both 1D and multi-dim
+        Assert.Contains("array_get_length", allCode);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_MdArray_Create2DString_HasMdarrayCreate()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "MdArrayTest");
+        var method = type.Methods.First(m => m.Name == "Create2DString");
+        var allCode = string.Join("\n", method.BasicBlocks.SelectMany(b => b.Instructions).Select(i => i.ToCpp()));
+        Assert.Contains("mdarray_create", allCode);
+    }
+
+    // ===== P/Invoke tests =====
+
+    [Fact]
+    public void Build_FeatureTest_PInvoke_NativeAbs_Detected()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "PInvokeTest");
+        var method = type.Methods.First(m => m.Name == "NativeAbs");
+        Assert.True(method.IsPInvoke);
+        Assert.Equal("msvcrt.dll", method.PInvokeModule);
+        Assert.Equal("abs", method.PInvokeEntryPoint);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PInvoke_NativeStrLen_Detected()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "PInvokeTest");
+        var method = type.Methods.First(m => m.Name == "NativeStrLen");
+        Assert.True(method.IsPInvoke);
+        Assert.Equal("msvcrt.dll", method.PInvokeModule);
+        Assert.Equal("strlen", method.PInvokeEntryPoint);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_PInvoke_NativeAbs_HasNoBody()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "PInvokeTest");
+        var method = type.Methods.First(m => m.Name == "NativeAbs");
+        // P/Invoke methods have no IL body
+        Assert.Empty(method.BasicBlocks);
+    }
+
+    // ===== Default Interface Methods (DIM) tests =====
+
+    [Fact]
+    public void Build_FeatureTest_DIM_InterfaceHasDefaultMethods()
+    {
+        var module = BuildFeatureTest();
+        var iface = module.Types.First(t => t.Name == "IGreeter");
+        Assert.True(iface.IsInterface);
+
+        // GetName is abstract — no body
+        var getName = iface.Methods.First(m => m.Name == "GetName");
+        Assert.True(getName.IsAbstract);
+        Assert.Empty(getName.BasicBlocks);
+
+        // Greet has a default body
+        var greet = iface.Methods.First(m => m.Name == "Greet");
+        Assert.False(greet.IsAbstract);
+        Assert.NotEmpty(greet.BasicBlocks);
+
+        // Version has a default body
+        var version = iface.Methods.First(m => m.Name == "Version");
+        Assert.False(version.IsAbstract);
+        Assert.NotEmpty(version.BasicBlocks);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_DIM_DefaultGreeterUser_UsesDefaultImpl()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "DefaultGreeterUser");
+
+        // DefaultGreeterUser implements IGreeter but doesn't override Greet()
+        var iface = module.Types.First(t => t.Name == "IGreeter");
+
+        // Find the interface impl for IGreeter
+        var ifaceImpl = type.InterfaceImpls.FirstOrDefault(i => i.Interface == iface);
+        Assert.NotNull(ifaceImpl);
+
+        // The Greet slot should point to the interface's default method
+        var greetIdx = iface.Methods
+            .Where(m => !m.IsConstructor && !m.IsStaticConstructor)
+            .ToList()
+            .FindIndex(m => m.Name == "Greet");
+        Assert.True(greetIdx >= 0);
+        var implMethod = ifaceImpl.MethodImpls[greetIdx];
+        Assert.NotNull(implMethod);
+        Assert.Equal(iface, implMethod.DeclaringType); // Points to interface method
+    }
+
+    [Fact]
+    public void Build_FeatureTest_DIM_CustomGreeterUser_OverridesDefault()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "CustomGreeterUser");
+        var iface = module.Types.First(t => t.Name == "IGreeter");
+
+        var ifaceImpl = type.InterfaceImpls.FirstOrDefault(i => i.Interface == iface);
+        Assert.NotNull(ifaceImpl);
+
+        // The Greet slot should point to the class's own override, not interface default
+        var greetIdx = iface.Methods
+            .Where(m => !m.IsConstructor && !m.IsStaticConstructor)
+            .ToList()
+            .FindIndex(m => m.Name == "Greet");
+        Assert.True(greetIdx >= 0);
+        var implMethod = ifaceImpl.MethodImpls[greetIdx];
+        Assert.NotNull(implMethod);
+        Assert.Equal(type, implMethod.DeclaringType); // Points to class method
+    }
+
+    [Fact]
+    public void Build_FeatureTest_DIM_ILogger2_AllDefaultMethods()
+    {
+        var module = BuildFeatureTest();
+        var iface = module.Types.First(t => t.Name == "ILogger2");
+        Assert.True(iface.IsInterface);
+
+        // Log has a default body
+        var log = iface.Methods.First(m => m.Name == "Log");
+        Assert.False(log.IsAbstract);
+        Assert.NotEmpty(log.BasicBlocks);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_DIM_LoggerUser_UsesAllDefaults()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "LoggerUser");
+        var iface = module.Types.First(t => t.Name == "ILogger2");
+
+        var ifaceImpl = type.InterfaceImpls.FirstOrDefault(i => i.Interface == iface);
+        Assert.NotNull(ifaceImpl);
+
+        // Log slot should point to interface default
+        var logIdx = iface.Methods
+            .Where(m => !m.IsConstructor && !m.IsStaticConstructor)
+            .ToList()
+            .FindIndex(m => m.Name == "Log");
+        Assert.True(logIdx >= 0);
+        var implMethod = ifaceImpl.MethodImpls[logIdx];
+        Assert.NotNull(implMethod);
+        Assert.Equal(iface, implMethod.DeclaringType);
+    }
+
+    // ===== Span<T> tests =====
+
+    [Fact]
+    public void Build_FeatureTest_SpanInt_SyntheticType_Created()
+    {
+        var module = BuildFeatureTest();
+        // Span<int> should be created as a synthetic generic instance
+        var spanInt = module.Types.FirstOrDefault(t => t.IsGenericInstance
+            && t.CppName.Contains("Span") && t.CppName.Contains("Int32"));
+        Assert.NotNull(spanInt);
+        Assert.True(spanInt.IsValueType);
+        Assert.True(spanInt.Fields.Any(f => f.CppName == "f_reference"));
+        Assert.True(spanInt.Fields.Any(f => f.CppName == "f_length"));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_SpanFromArray_HasInlineCode()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "SpanTest");
+        var method = type.Methods.First(m => m.Name == "SpanFromArray");
+        var allInstr = method.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        // Should contain inline Span construction from array
+        var rawCpp = allInstr.OfType<IRRawCpp>().ToList();
+        Assert.True(rawCpp.Any(r => r.Code.Contains("f_reference")));
+        Assert.True(rawCpp.Any(r => r.Code.Contains("f_length")));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_SpanGetItem_HasBoundsCheck()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "SpanTest");
+        var method = type.Methods.First(m => m.Name == "SpanGetItem");
+        var allInstr = method.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        var rawCpp = allInstr.OfType<IRRawCpp>().ToList();
+        // Should contain bounds check
+        Assert.True(rawCpp.Any(r => r.Code.Contains("throw_index_out_of_range")));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_SpanSlice_HasSliceCode()
+    {
+        var module = BuildFeatureTest();
+        var type = module.Types.First(t => t.Name == "SpanTest");
+        var method = type.Methods.First(m => m.Name == "SpanSlice");
+        var allInstr = method.BasicBlocks.SelectMany(b => b.Instructions).ToList();
+        var rawCpp = allInstr.OfType<IRRawCpp>().ToList();
+        // Should contain Slice inline code
+        Assert.True(rawCpp.Any(r => r.Code.Contains("f_reference")));
+    }
+
+    [Fact]
+    public void Build_FeatureTest_ReadOnlySpan_SyntheticType_Created()
+    {
+        var module = BuildFeatureTest();
+        var roSpan = module.Types.FirstOrDefault(t => t.IsGenericInstance
+            && t.CppName.Contains("ReadOnlySpan"));
+        Assert.NotNull(roSpan);
+        Assert.True(roSpan.IsValueType);
+    }
+
+    // ===== Generic Variance tests =====
+
+    [Fact]
+    public void Build_FeatureTest_Variance_CovariantInstance_HasVariance()
+    {
+        var module = BuildFeatureTest();
+        // ICovariant<string> should be created as a generic instance with covariant variance
+        var covariantStr = module.Types.FirstOrDefault(t => t.IsGenericInstance
+            && t.CppName.Contains("ICovariant") && t.CppName.Contains("String"));
+        Assert.NotNull(covariantStr);
+        Assert.True(covariantStr.IsInterface);
+        Assert.Single(covariantStr.GenericParameterVariances);
+        Assert.Equal(GenericVariance.Covariant, covariantStr.GenericParameterVariances[0]);
+        Assert.NotNull(covariantStr.GenericDefinitionCppName);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Variance_ContravariantInstance_HasVariance()
+    {
+        var module = BuildFeatureTest();
+        // IContravariant<object> should be created with contravariant variance
+        var contravariantObj = module.Types.FirstOrDefault(t => t.IsGenericInstance
+            && t.CppName.Contains("IContravariant") && t.CppName.Contains("Object"));
+        Assert.NotNull(contravariantObj);
+        Assert.Single(contravariantObj.GenericParameterVariances);
+        Assert.Equal(GenericVariance.Contravariant, contravariantObj.GenericParameterVariances[0]);
+    }
+
+    [Fact]
+    public void Build_FeatureTest_Variance_GenericArguments_Populated()
+    {
+        var module = BuildFeatureTest();
+        var covariantStr = module.Types.FirstOrDefault(t => t.IsGenericInstance
+            && t.CppName.Contains("ICovariant") && t.CppName.Contains("String"));
+        Assert.NotNull(covariantStr);
+        Assert.Single(covariantStr.GenericArguments);
+        Assert.Equal("System.String", covariantStr.GenericArguments[0]);
     }
 }

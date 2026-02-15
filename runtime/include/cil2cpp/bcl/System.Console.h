@@ -14,16 +14,22 @@ namespace System {
 void Console_WriteLine();
 void Console_WriteLine(String* value);
 void Console_WriteLine(Int32 value);
+void Console_WriteLine(UInt32 value);
 void Console_WriteLine(Int64 value);
+void Console_WriteLine(UInt64 value);
 void Console_WriteLine(Single value);
 void Console_WriteLine(Double value);
 void Console_WriteLine(Boolean value);
 void Console_WriteLine(Object* value);
+void Console_WriteLine(UInt16 value);
+void Console_WriteLine(Int16 value);
 
 // Console.Write overloads
 void Console_Write(String* value);
 void Console_Write(Int32 value);
+void Console_Write(UInt32 value);
 void Console_Write(Int64 value);
+void Console_Write(UInt64 value);
 void Console_Write(Single value);
 void Console_Write(Double value);
 void Console_Write(Boolean value);

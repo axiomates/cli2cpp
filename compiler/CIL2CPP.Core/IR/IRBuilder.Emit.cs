@@ -9,6 +9,16 @@ public partial class IRBuilder
     private void EmitStoreLocal(IRBasicBlock block, Stack<string> stack, IRMethod method, int index)
     {
         var val = stack.Count > 0 ? stack.Pop() : "0";
+        // For pointer-type locals, add explicit cast to handle implicit upcasts
+        // (e.g., Dog* → Animal*) since generated C++ structs don't use C++ inheritance.
+        if (index < method.Locals.Count)
+        {
+            var local = method.Locals[index];
+            if (local.CppTypeName.EndsWith("*") && local.CppTypeName != "void*")
+            {
+                val = $"({local.CppTypeName}){val}";
+            }
+        }
         block.Instructions.Add(new IRAssign
         {
             Target = GetLocalName(method, index),
@@ -20,6 +30,15 @@ public partial class IRBuilder
     {
         var right = stack.Count > 0 ? stack.Pop() : "0";
         var left = stack.Count > 0 ? stack.Pop() : "0";
+
+        // cgt.un with nullptr: "ptr > nullptr" is invalid in C++.
+        // IL uses "ldloc; ldnull; cgt.un" as an idiom for "ptr != null".
+        if (op == ">" && (right == "nullptr" || left == "nullptr"))
+            op = "!=";
+        // Similarly, clt.un with nullptr is "nullptr != ptr" pattern
+        if (op == "<" && (right == "nullptr" || left == "nullptr"))
+            op = "!=";
+
         var tmp = $"__t{tempCounter++}";
         block.Instructions.Add(new IRBinaryOp
         {
@@ -41,8 +60,39 @@ public partial class IRBuilder
     }
 
     private void EmitMethodCall(IRBasicBlock block, Stack<string> stack, MethodReference methodRef,
-        bool isVirtual, ref int tempCounter)
+        bool isVirtual, ref int tempCounter, TypeReference? constrainedType = null)
     {
+        // Constrained call redirect: when constrained. callvirt on a BCL value type calls a
+        // System.Object virtual method (Equals/GetHashCode/ToString), redirect the method
+        // reference to the constrained type so BCL interception (ValueTuple, etc.) can handle it.
+        // Only for RuntimeProvided types whose methods are intercepted (no actual C++ bodies/vtable entries).
+        if (constrainedType != null && isVirtual && methodRef.HasThis
+            && (methodRef.DeclaringType.FullName == "System.Object"
+                || methodRef.DeclaringType.FullName == "System.ValueType")
+            && methodRef.Name is "GetHashCode" or "Equals" or "ToString")
+        {
+            var constrainedIrType = _typeCache.GetValueOrDefault(ResolveCacheKey(constrainedType));
+            // Check if the constrained type is a BCL value type with intercepted methods
+            // (ValueTuple, Nullable, etc.) — these have no actual C++ function bodies in the vtable
+            var isBclIntercepted = constrainedIrType != null && constrainedIrType.IsValueType
+                && (IsValueTupleType(constrainedType) || IsNullableType(constrainedType));
+            if (isBclIntercepted)
+            {
+                // Create a new MethodReference with the constrained type as declaring type
+                var redirected = new MethodReference(methodRef.Name, methodRef.ReturnType, constrainedType)
+                {
+                    HasThis = methodRef.HasThis,
+                    ExplicitThis = methodRef.ExplicitThis,
+                    CallingConvention = methodRef.CallingConvention,
+                };
+                foreach (var p in methodRef.Parameters)
+                    redirected.Parameters.Add(new ParameterDefinition(p.Name, p.Attributes, p.ParameterType));
+                methodRef = redirected;
+                isVirtual = false; // Value type — no vtable dispatch
+                constrainedType = null; // Consumed
+            }
+        }
+
         // Special: Nullable<T> methods — emit inline C++ instead of unresolved BCL calls
         if (TryEmitNullableCall(block, stack, methodRef, ref tempCounter))
             return;
@@ -71,6 +121,30 @@ public partial class IRBuilder
         if (TryEmitThreadCall(block, stack, methodRef, ref tempCounter))
             return;
 
+        // Special: System.Type reflection methods
+        if (TryEmitTypeCall(block, stack, methodRef, ref tempCounter))
+            return;
+
+        // Special: Span<T> / ReadOnlySpan<T> methods
+        if (TryEmitSpanCall(block, stack, methodRef, ref tempCounter))
+            return;
+
+        // Special: EqualityComparer<T> methods
+        if (TryEmitEqualityComparerCall(block, stack, methodRef, ref tempCounter))
+            return;
+
+        // Special: Multi-dimensional array methods (Get, Set, Address on T[,] etc.)
+        if (TryEmitMdArrayCall(block, stack, methodRef, ref tempCounter))
+            return;
+
+        // Special: List<T> methods
+        if (TryEmitListCall(block, stack, methodRef, ref tempCounter))
+            return;
+
+        // Special: Dictionary<K,V> methods
+        if (TryEmitDictionaryCall(block, stack, methodRef, ref tempCounter))
+            return;
+
         // Special: Delegate.Invoke — emit IRDelegateInvoke instead of normal call
         var declaringCacheKey = ResolveCacheKey(methodRef.DeclaringType);
         if (methodRef.Name == "Invoke" && methodRef.HasThis
@@ -93,7 +167,7 @@ public partial class IRBuilder
                 invoke.ParamTypes.Add(CppNameMapper.GetCppTypeForDecl(p.ParameterType.FullName));
             invoke.Arguments.AddRange(invokeArgs);
 
-            if (methodRef.ReturnType.FullName != "System.Void")
+            if (!IsVoidReturnType(methodRef.ReturnType))
             {
                 var tmp = $"__t{tempCounter++}";
                 invoke.ResultVar = tmp;
@@ -178,10 +252,60 @@ public partial class IRBuilder
         }
         args.Reverse();
 
+        // Interlocked _obj methods need Object*/Object** casts for generic type arguments
+        if (mappedName != null && mappedName.EndsWith("_obj")
+            && mappedName.Contains("Interlocked"))
+        {
+            // First arg is T** → cast to Object**
+            if (args.Count > 0)
+                args[0] = $"(cil2cpp::Object**){args[0]}";
+            // Remaining args are T → cast to Object*
+            for (int i = 1; i < args.Count; i++)
+                args[i] = $"(cil2cpp::Object*){args[i]}";
+        }
+
         // 'this' for instance methods
         if (methodRef.HasThis)
         {
             var thisArg = stack.Count > 0 ? stack.Pop() : "__this";
+            if (mappedName != null && methodRef.DeclaringType.FullName == "System.Object")
+            {
+                // BCL mapped Object methods expect cil2cpp::Object*
+                thisArg = $"(cil2cpp::Object*){thisArg}";
+            }
+            else if (mappedName != null && methodRef.HasThis)
+            {
+                // BCL mapped value type instance methods (Int32.ToString, etc.)
+                // 'this' is a pointer (&x) but the mapped function expects a value — dereference
+                bool isValueTarget = false;
+                try { isValueTarget = methodRef.DeclaringType.Resolve()?.IsValueType == true; }
+                catch { }
+                if (isValueTarget)
+                    thisArg = $"*({thisArg})";
+            }
+            else if (!irCall.IsVirtual && mappedName == null
+                && methodRef.DeclaringType.FullName != "System.Object")
+            {
+                // For non-virtual calls / callvirt without vtable slot: cast 'this' to declaring type
+                // (C++ structs don't have inheritance, so Dog* ≠ Animal*)
+                // Skip for: value types, runtime types (cil2cpp::), runtime-provided types
+                var declCacheKey = ResolveCacheKey(methodRef.DeclaringType);
+                var isValueDecl = false;
+                if (_typeCache.TryGetValue(declCacheKey, out var declIrType))
+                    isValueDecl = declIrType.IsValueType;
+                else
+                {
+                    // Not in _typeCache — check Cecil TypeReference (BCL value types)
+                    try { isValueDecl = methodRef.DeclaringType.Resolve()?.IsValueType == true; }
+                    catch { /* resolution failed — assume not value type */ }
+                }
+                if (!isValueDecl)
+                {
+                    var declTypeCpp = GetMangledTypeNameForRef(methodRef.DeclaringType);
+                    if (!declTypeCpp.StartsWith("cil2cpp::") && !RuntimeProvidedTypes.Contains(methodRef.DeclaringType.FullName))
+                        thisArg = $"({declTypeCpp}*){thisArg}";
+                }
+            }
             irCall.Arguments.Add(thisArg);
         }
 
@@ -194,6 +318,46 @@ public partial class IRBuilder
             && methodRef.Name is "ToString" or "Equals" or "GetHashCode")
         {
             mappedName = null;
+        }
+
+        // Constrained call on value type: convert virtual dispatch to direct call or box
+        // ECMA-335 III.2.1: constrained. callvirt on value type T:
+        //   - If T overrides the method: call T's override directly (no boxing)
+        //   - Otherwise: box T and do virtual dispatch on the boxed object
+        if (constrainedType != null && isVirtual && methodRef.HasThis && mappedName == null)
+        {
+            var constrainedTypeName = ResolveTypeRefOperand(constrainedType);
+            var constrainedIrType = _typeCache.GetValueOrDefault(ResolveCacheKey(constrainedType));
+            if (constrainedIrType != null && constrainedIrType.IsValueType)
+            {
+                // Find the method override on the constrained type (only methods with bodies)
+                var overrideMethod = constrainedIrType.Methods.FirstOrDefault(m =>
+                    m.Name == methodRef.Name && !m.IsStaticConstructor && !m.IsStatic
+                    && m.BasicBlocks.Count > 0
+                    && ParameterTypesMatchRef(m, methodRef));
+                if (overrideMethod != null)
+                {
+                    // Direct call to the value type's override
+                    irCall.FunctionName = overrideMethod.CppName;
+                    isVirtual = false; // Suppress vtable dispatch
+                }
+                else
+                {
+                    // No override found — box the value type and do vtable dispatch
+                    // The `this` arg is currently a pointer to the value type; box it
+                    if (irCall.Arguments.Count > 0)
+                    {
+                        var thisPtr = irCall.Arguments[0]; // e.g., "(cil2cpp::Object*)&loc_0"
+                        var cppTypeName = GetMangledTypeNameForRef(constrainedType);
+                        var typeInfoName = $"{cppTypeName}_TypeInfo";
+                        // Strip the (cil2cpp::Object*) cast to get the raw value pointer
+                        var rawPtr = thisPtr;
+                        if (rawPtr.StartsWith("(cil2cpp::Object*)"))
+                            rawPtr = rawPtr["(cil2cpp::Object*)".Length..];
+                        irCall.Arguments[0] = $"(cil2cpp::Object*)cil2cpp::box_raw({rawPtr}, sizeof({cppTypeName}), &{typeInfoName})";
+                    }
+                }
+            }
         }
 
         // Virtual dispatch detection
@@ -219,7 +383,8 @@ public partial class IRBuilder
                     irCall.IsInterfaceCall = true;
                     irCall.InterfaceTypeCppName = resolved.CppName;
                     irCall.VTableSlot = ifaceSlot;
-                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(
+                        ResolveGenericTypeRef(methodRef.ReturnType, methodRef.DeclaringType));
                     irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
                 }
             }
@@ -232,7 +397,8 @@ public partial class IRBuilder
                 {
                     irCall.IsVirtual = true;
                     irCall.VTableSlot = entry.Slot;
-                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(
+                        ResolveGenericTypeRef(methodRef.ReturnType, methodRef.DeclaringType));
                     irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
                 }
             }
@@ -250,14 +416,15 @@ public partial class IRBuilder
                 {
                     irCall.IsVirtual = true;
                     irCall.VTableSlot = slot;
-                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(methodRef.ReturnType.FullName);
+                    irCall.VTableReturnType = CppNameMapper.GetCppTypeForDecl(
+                        ResolveGenericTypeRef(methodRef.ReturnType, methodRef.DeclaringType));
                     irCall.VTableParamTypes = BuildVTableParamTypes(methodRef);
                 }
             }
         }
 
-        // Return value
-        if (methodRef.ReturnType.FullName != "System.Void")
+        // Return value — skip for void methods (including modreq-wrapped void like init-only setters)
+        if (!IsVoidReturnType(methodRef.ReturnType))
         {
             var tmp = $"__t{tempCounter++}";
             irCall.ResultVar = tmp;
@@ -269,6 +436,10 @@ public partial class IRBuilder
     private void EmitNewObj(IRBasicBlock block, Stack<string> stack, MethodReference ctorRef,
         ref int tempCounter)
     {
+        // Special: BCL exception types (System.Exception, InvalidOperationException, etc.)
+        if (TryEmitExceptionNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
         // Special: Nullable<T> constructor (newobj pattern — rare, usually ldloca+call)
         if (TryEmitNullableNewObj(block, stack, ctorRef, ref tempCounter))
             return;
@@ -293,15 +464,53 @@ public partial class IRBuilder
         if (TryEmitThreadNewObj(block, stack, ctorRef, ref tempCounter))
             return;
 
+        // Special: Span<T> / ReadOnlySpan<T> constructor
+        if (TryEmitSpanNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: EqualityComparer<T> constructor
+        if (TryEmitEqualityComparerNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: Multi-dimensional array constructor (newobj T[,]::.ctor)
+        if (TryEmitMdArrayNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: List<T> constructor
+        if (TryEmitListNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
+        // Special: Dictionary<K,V> constructor
+        if (TryEmitDictionaryNewObj(block, stack, ctorRef, ref tempCounter))
+            return;
+
         var cacheKey = ResolveCacheKey(ctorRef.DeclaringType);
         var typeCpp = GetMangledTypeNameForRef(ctorRef.DeclaringType);
         var tmp = $"__t{tempCounter++}";
 
         // Detect delegate constructor: base is MulticastDelegate/Delegate, ctor(object, IntPtr)
-        if (ctorRef.Parameters.Count == 2
-            && _typeCache.TryGetValue(cacheKey, out var delegateType)
-            && delegateType.IsDelegate)
+        var isDelegateCtor = false;
+        if (ctorRef.Parameters.Count == 2)
         {
+            if (_typeCache.TryGetValue(cacheKey, out var delegateType) && delegateType.IsDelegate)
+                isDelegateCtor = true;
+            else
+            {
+                // Fallback: check Cecil for BCL delegate types not in _typeCache
+                try
+                {
+                    var resolved = ctorRef.DeclaringType.Resolve();
+                    isDelegateCtor = resolved?.BaseType?.FullName is "System.MulticastDelegate" or "System.Delegate";
+                }
+                catch { }
+            }
+        }
+        if (isDelegateCtor)
+        {
+            // Ensure BCL delegate type has a TypeInfo (register if not in _typeCache)
+            if (!_typeCache.ContainsKey(cacheKey))
+                RegisterBclDelegateType(cacheKey, typeCpp);
+
             // Stack has: [target (object), functionPtr (IntPtr)]
             var fptr = stack.Count > 0 ? stack.Pop() : "nullptr";
             var target = stack.Count > 0 ? stack.Pop() : "nullptr";
@@ -326,19 +535,102 @@ public partial class IRBuilder
         }
         args.Reverse();
 
-        block.Instructions.Add(new IRNewObj
+        // Value types: allocate on stack instead of heap
+        if (_typeCache.TryGetValue(cacheKey, out var irType) && irType.IsValueType)
         {
-            TypeCppName = typeCpp,
-            CtorName = ctorName,
-            ResultVar = tmp,
-            CtorArgs = { },
+            block.Instructions.Add(new IRDeclareLocal { TypeName = typeCpp, VarName = tmp });
+            var allArgs = new List<string> { $"&{tmp}" };
+            allArgs.AddRange(args);
+            block.Instructions.Add(new IRCall
+            {
+                FunctionName = ctorName,
+                Arguments = { },
+            });
+            var call = (IRCall)block.Instructions.Last();
+            call.Arguments.AddRange(allArgs);
+            stack.Push(tmp);
+        }
+        else
+        {
+            // Runtime-provided types: use cil2cpp:: struct name for sizeof/cast,
+            // but keep mangled name for TypeInfo reference
+            var runtimeCpp = GetRuntimeProvidedCppTypeName(ctorRef.DeclaringType.FullName);
+            if (runtimeCpp != null)
+            {
+                block.Instructions.Add(new IRRawCpp
+                {
+                    Code = $"auto {tmp} = ({runtimeCpp}*)cil2cpp::gc::alloc(sizeof({runtimeCpp}), &{typeCpp}_TypeInfo);"
+                });
+                // Call constructor if it has args
+                if (args.Count > 0)
+                {
+                    var allArgs = new List<string> { tmp };
+                    allArgs.AddRange(args);
+                    block.Instructions.Add(new IRCall
+                    {
+                        FunctionName = ctorName,
+                        Arguments = { },
+                    });
+                    var call = (IRCall)block.Instructions.Last();
+                    call.Arguments.AddRange(allArgs);
+                }
+            }
+            else
+            {
+                block.Instructions.Add(new IRNewObj
+                {
+                    TypeCppName = typeCpp,
+                    CtorName = ctorName,
+                    ResultVar = tmp,
+                    CtorArgs = { },
+                });
+
+                // Add ctor args
+                var newObj = (IRNewObj)block.Instructions.Last();
+                newObj.CtorArgs.AddRange(args);
+            }
+
+            stack.Push(tmp);
+        }
+    }
+
+    /// <summary>
+    /// Intercepts newobj for BCL exception types (System.Exception, InvalidOperationException, etc.)
+    /// and emits runtime exception creation code instead of trying to reference non-existent
+    /// generated structs/constructors.
+    /// </summary>
+    private bool TryEmitExceptionNewObj(IRBasicBlock block, Stack<string> stack,
+        MethodReference ctorRef, ref int tempCounter)
+    {
+        var runtimeCppName = CppNameMapper.GetRuntimeExceptionCppName(ctorRef.DeclaringType.FullName);
+        if (runtimeCppName == null) return false;
+
+        var tmp = $"__t{tempCounter++}";
+        var paramCount = ctorRef.Parameters.Count;
+
+        // Pop constructor args
+        var args = new List<string>();
+        for (int i = 0; i < paramCount; i++)
+            args.Add(stack.Count > 0 ? stack.Pop() : "0");
+        args.Reverse();
+
+        // Allocate: (ExcType*)cil2cpp::gc::alloc(sizeof(ExcType), &ExcType_TypeInfo)
+        block.Instructions.Add(new IRRawCpp
+        {
+            Code = $"auto {tmp} = ({runtimeCppName}*)cil2cpp::gc::alloc(sizeof({runtimeCppName}), &{runtimeCppName}_TypeInfo);"
         });
 
-        // Add ctor args
-        var newObj = (IRNewObj)block.Instructions.Last();
-        newObj.CtorArgs.AddRange(args);
+        // Set fields based on constructor signature
+        // .ctor() — no args
+        // .ctor(string message) — set message
+        // .ctor(string message, Exception inner) — set message + inner
+        if (paramCount >= 1)
+            block.Instructions.Add(new IRRawCpp { Code = $"{tmp}->message = (cil2cpp::String*){args[0]};" });
+        if (paramCount >= 2)
+            block.Instructions.Add(new IRRawCpp { Code = $"{tmp}->inner_exception = (cil2cpp::Exception*){args[1]};" });
 
         stack.Push(tmp);
+        return true;
     }
 
     private string? MapBclMethod(MethodReference methodRef)
@@ -376,6 +668,18 @@ public partial class IRBuilder
             };
         }
 
+        // Value type instance methods — ToString on primitives
+        if (fullType == "System.Int32" && name == "ToString" && methodRef.Parameters.Count == 0)
+            return "cil2cpp::string_from_int32";
+        if (fullType == "System.Double" && name == "ToString" && methodRef.Parameters.Count == 0)
+            return "cil2cpp::string_from_double";
+        if (fullType == "System.Boolean" && name == "ToString" && methodRef.Parameters.Count == 0)
+            return "cil2cpp::object_to_string";
+        if (fullType == "System.Single" && name == "ToString" && methodRef.Parameters.Count == 0)
+            return "cil2cpp::string_from_double";
+        if (fullType == "System.Int64" && name == "ToString" && methodRef.Parameters.Count == 0)
+            return "cil2cpp::string_from_int64";
+
         // Object methods
         if (fullType == "System.Object")
         {
@@ -384,10 +688,30 @@ public partial class IRBuilder
                 "ToString" => "cil2cpp::object_to_string",
                 "GetHashCode" => "cil2cpp::object_get_hash_code",
                 "Equals" => "cil2cpp::object_equals",
-                "GetType" => "cil2cpp::object_get_type",
+                "GetType" => "cil2cpp::object_get_type_managed",
                 "ReferenceEquals" => "cil2cpp::object_reference_equals",
                 "MemberwiseClone" => "cil2cpp::object_memberwise_clone",
-                ".ctor" => null, // Object ctor is a no-op
+                ".ctor" => null, // Object ctor handled as System_Object__ctor (declared in cil2cpp.h)
+                "Finalize" => null, // Object.Finalize is a no-op (declared in cil2cpp.h)
+                _ => null
+            };
+        }
+
+        // System.Attribute — base class for custom attributes, alias to Object
+        if (fullType == "System.Attribute")
+        {
+            if (name == ".ctor") return "System_Object__ctor";
+            return null;
+        }
+
+        // Array methods (needed for multi-dim arrays — System.Array can't be resolved in single-assembly)
+        if (fullType == "System.Array")
+        {
+            return name switch
+            {
+                "get_Length" => "cil2cpp::array_get_length",
+                "get_Rank" => "cil2cpp::array_get_rank",
+                "GetLength" => "cil2cpp::array_get_length_dim",
                 _ => null
             };
         }
@@ -443,9 +767,16 @@ public partial class IRBuilder
         // Monitor methods — managed wrappers for InternalCall, need direct mapping
         if (fullType == "System.Threading.Monitor")
         {
+            if (name == "Enter")
+            {
+                // 1-arg: Monitor.Enter(object)
+                // 2-arg: Monitor.Enter(object, ref bool lockTaken)
+                return methodRef.Parameters.Count >= 2
+                    ? "cil2cpp::icall::Monitor_Enter2"
+                    : "cil2cpp::icall::Monitor_Enter";
+            }
             return name switch
             {
-                "Enter" => "cil2cpp::icall::Monitor_Enter",
                 "Exit" => "cil2cpp::icall::Monitor_Exit",
                 "ReliableEnter" => "cil2cpp::icall::Monitor_ReliableEnter",
                 "Wait" => "cil2cpp::icall::Monitor_Wait",
@@ -483,6 +814,15 @@ public partial class IRBuilder
             "System.Object" => "_obj",
             _ => null
         };
+        // For generic Interlocked methods (e.g., CompareExchange<T>), resolve from the generic argument
+        if (suffix == null && methodRef is GenericInstanceMethod gimInterlocked && gimInterlocked.GenericArguments.Count > 0)
+        {
+            var typeArg = gimInterlocked.GenericArguments[0];
+            bool isValueType = false;
+            try { isValueType = typeArg.Resolve()?.IsValueType == true; } catch { }
+            // Reference types (delegates, classes) → use _obj overload
+            suffix = isValueType ? null : "_obj";
+        }
         if (suffix == null) return null;
 
         return name switch
@@ -494,6 +834,32 @@ public partial class IRBuilder
             "Add" when suffix is "_i32" => "cil2cpp::icall::Interlocked_Add_i32",
             _ => null
         };
+    }
+
+    /// <summary>
+    /// Map runtime-provided IL type names to their C++ struct type names.
+    /// Returns null if the type is not runtime-provided or doesn't need mapping.
+    /// </summary>
+    private static string? GetRuntimeProvidedCppTypeName(string ilFullName) => ilFullName switch
+    {
+        "System.Object" => "cil2cpp::Object",
+        "System.String" => "cil2cpp::String",
+        "System.Array" => "cil2cpp::Array",
+        _ => null
+    };
+
+    /// <summary>
+    /// Check if a return type is void (handles modreq-wrapped void from init-only setters).
+    /// </summary>
+    private static bool IsVoidReturnType(Mono.Cecil.TypeReference returnType)
+    {
+        if (returnType.FullName == "System.Void") return true;
+        // Init-only setters wrap void with RequiredModifierType (modreq IsExternalInit)
+        if (returnType is Mono.Cecil.RequiredModifierType modReq)
+            return modReq.ElementType.FullName == "System.Void";
+        if (returnType is Mono.Cecil.OptionalModifierType modOpt)
+            return modOpt.ElementType.FullName == "System.Void";
+        return false;
     }
 
     /// <summary>
@@ -590,6 +956,14 @@ public partial class IRBuilder
                 // Fallback: implicit name + parameter matching
                 implMethod ??= FindImplementingMethod(irType, ifaceMethod);
 
+                // DIM fallback: if no class impl, use the interface's default method body
+                // At Pass 5 time, bodies haven't been converted yet (Pass 6), so check
+                // !IsAbstract which indicates the Cecil method has a body
+                if (implMethod == null && !ifaceMethod.IsAbstract)
+                {
+                    implMethod = ifaceMethod;
+                }
+
                 impl.MethodImpls.Add(implMethod); // null if not found — keeps slot alignment
             }
             irType.InterfaceImpls.Add(impl);
@@ -632,10 +1006,69 @@ public partial class IRBuilder
     private List<string> BuildVTableParamTypes(MethodReference methodRef)
     {
         var types = new List<string>();
-        types.Add(CppNameMapper.MangleTypeName(methodRef.DeclaringType.FullName) + "*");
+        // Use GetCppTypeForDecl to correctly map System.Object → cil2cpp::Object*, etc.
+        types.Add(CppNameMapper.GetCppTypeForDecl(methodRef.DeclaringType.FullName));
         foreach (var p in methodRef.Parameters)
-            types.Add(CppNameMapper.GetCppTypeForDecl(p.ParameterType.FullName));
+            types.Add(CppNameMapper.GetCppTypeForDecl(
+                ResolveGenericTypeRef(p.ParameterType, methodRef.DeclaringType)));
         return types;
+    }
+
+    /// <summary>
+    /// Resolve generic parameter references (!0, !1, etc.) in a type reference
+    /// using the generic arguments from the declaring type.
+    /// </summary>
+    private static string ResolveGenericTypeRef(TypeReference typeRef, TypeReference declaringType)
+    {
+        if (declaringType is not GenericInstanceType git) return typeRef.FullName;
+
+        if (typeRef is GenericParameter gp)
+        {
+            if (gp.Position < git.GenericArguments.Count)
+                return git.GenericArguments[gp.Position].FullName;
+        }
+
+        if (typeRef is GenericInstanceType returnGit)
+        {
+            // Generic instance with !0 in arguments — resolve each argument
+            bool anyResolved = false;
+            var argNames = new List<string>();
+            foreach (var arg in returnGit.GenericArguments)
+            {
+                if (arg is GenericParameter gp2 && gp2.Position < git.GenericArguments.Count)
+                {
+                    argNames.Add(git.GenericArguments[gp2.Position].FullName);
+                    anyResolved = true;
+                }
+                else
+                {
+                    argNames.Add(arg.FullName);
+                }
+            }
+            if (anyResolved)
+                return $"{returnGit.ElementType.FullName}<{string.Join(",", argNames)}>";
+        }
+
+        return typeRef.FullName;
+    }
+
+    /// <summary>
+    /// Register a BCL delegate type that doesn't exist in _typeCache.
+    /// Creates a minimal IRType so the TypeInfo gets declared and defined.
+    /// </summary>
+    private void RegisterBclDelegateType(string ilFullName, string cppName)
+    {
+        var lastDot = ilFullName.LastIndexOf('.');
+        var bclDelegate = new IRType
+        {
+            ILFullName = ilFullName,
+            Name = lastDot >= 0 ? ilFullName[(lastDot + 1)..] : ilFullName,
+            Namespace = lastDot >= 0 ? ilFullName[..lastDot] : "",
+            CppName = cppName,
+            IsDelegate = true,
+        };
+        _typeCache[ilFullName] = bclDelegate;
+        _module.Types.Add(bclDelegate);
     }
 
     private string GetArgName(IRMethod method, int index)
@@ -651,6 +1084,44 @@ public partial class IRBuilder
         return $"__arg{index}";
     }
 
+    /// <summary>
+    /// Determines whether a field access should use '.' (value) vs '->' (pointer).
+    /// Value type locals accessed directly (ldloc) use '.'; addresses (&amp;loc) use '->'.
+    /// </summary>
+    private static bool IsValueTypeAccess(TypeReference declaringType, string objExpr, IRMethod method)
+    {
+        // Address-of expressions are always pointers
+        if (objExpr.StartsWith("&")) return false;
+
+        // __this is always a pointer
+        if (objExpr == "__this") return false;
+
+        // Check if the declaring type is a value type
+        var resolved = declaringType.Resolve();
+        bool isValueType = resolved?.IsValueType ?? false;
+        if (!isValueType)
+        {
+            // Also check our own registry (for generic specializations etc.)
+            isValueType = CppNameMapper.IsValueType(declaringType.FullName);
+        }
+        if (!isValueType) return false;
+
+        // If the object expression is a local variable of value type, it's a value access
+        // Local names follow the pattern loc_N
+        if (objExpr.StartsWith("loc_")) return true;
+
+        // Temp variables holding value types also use value access.
+        // Only pointer-typed temps (from alloc/newobj) get cast to Type* and won't match here
+        // because the declaring type's IsValueType would still be true, but the obj expr
+        // would contain a cast like (Type*)__tN. Plain __tN without cast = value type.
+        if (objExpr.StartsWith("__t") && !objExpr.Contains("*")) return true;
+
+        // Method parameters that are value types
+        if (method.Parameters.Any(p => p.CppName == objExpr)) return true;
+
+        return false;
+    }
+
     private string GetLocalName(IRMethod method, int index)
     {
         if (index >= 0 && index < method.Locals.Count)
@@ -659,7 +1130,7 @@ public partial class IRBuilder
     }
 
     // Exception event helpers
-    private enum ExceptionEventKind { TryBegin, CatchBegin, FinallyBegin, HandlerEnd }
+    private enum ExceptionEventKind { TryBegin, CatchBegin, FinallyBegin, FilterBegin, FilterHandlerBegin, HandlerEnd }
 
     private record ExceptionEvent(ExceptionEventKind Kind, string? CatchTypeName = null, int TryStart = 0, int TryEnd = 0);
 

@@ -101,6 +101,16 @@ extern thread_local ExceptionContext* g_exception_context;
 [[noreturn]] void throw_overflow();
 
 /**
+ * Create and throw an ArgumentNullException.
+ */
+[[noreturn]] void throw_argument_null();
+
+/**
+ * Create and throw an ArgumentException.
+ */
+[[noreturn]] void throw_argument();
+
+/**
  * Get current exception (in catch block).
  */
 Exception* get_current_exception();
@@ -118,6 +128,16 @@ inline void null_check(void* ptr) {
         throw_null_reference();
     }
 }
+
+// Exception TypeInfo extern declarations (defined in exception.cpp)
+extern TypeInfo Exception_TypeInfo;
+extern TypeInfo NullReferenceException_TypeInfo;
+extern TypeInfo IndexOutOfRangeException_TypeInfo;
+extern TypeInfo InvalidCastException_TypeInfo;
+extern TypeInfo InvalidOperationException_TypeInfo;
+extern TypeInfo ArgumentException_TypeInfo;
+extern TypeInfo ArgumentNullException_TypeInfo;
+extern TypeInfo OverflowException_TypeInfo;
 
 } // namespace cil2cpp
 
@@ -159,6 +179,12 @@ inline void null_check(void* ptr) {
             } \
         } \
     }
+
+// Filter begin: like CATCH_ALL but does NOT set __exc_caught.
+// The endfilter instruction decides whether to accept (set __exc_caught) or reject (rethrow).
+#define CIL2CPP_FILTER_BEGIN \
+        } else { \
+            __exc_ctx.state = 1;
 
 #define CIL2CPP_RETHROW \
     do { \

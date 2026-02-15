@@ -60,9 +60,29 @@ void Console_WriteLine(Int32 value) {
     printf("%d\n", value);
 }
 
+void Console_WriteLine(UInt32 value) {
+    init_console();
+    printf("%u\n", value);
+}
+
 void Console_WriteLine(Int64 value) {
     init_console();
     printf("%lld\n", static_cast<long long>(value));
+}
+
+void Console_WriteLine(UInt64 value) {
+    init_console();
+    printf("%llu\n", static_cast<unsigned long long>(value));
+}
+
+void Console_WriteLine(UInt16 value) {
+    init_console();
+    printf("%u\n", static_cast<unsigned>(value));
+}
+
+void Console_WriteLine(Int16 value) {
+    init_console();
+    printf("%d\n", static_cast<int>(value));
 }
 
 void Console_WriteLine(Single value) {
@@ -101,9 +121,19 @@ void Console_Write(Int32 value) {
     printf("%d", value);
 }
 
+void Console_Write(UInt32 value) {
+    init_console();
+    printf("%u", value);
+}
+
 void Console_Write(Int64 value) {
     init_console();
     printf("%lld", static_cast<long long>(value));
+}
+
+void Console_Write(UInt64 value) {
+    init_console();
+    printf("%llu", static_cast<unsigned long long>(value));
 }
 
 void Console_Write(Single value) {
